@@ -1,0 +1,56 @@
+Database:
+    - Will contain a set of securities which will each have order books and time and sales information for each timestamp
+
+    - An orderbook (Book) for a given timestamp will have a set of bids and asks with each limit order containing the following information (some of which may be missing)
+        order_id ~ a unique id for the order
+        period ~ [A unique identifier for round number , will be zero unless exchange is RIT]
+        tick ~ [A unix timestamp in seconds]
+        trader_id ~ [Unique id for the trader (may not be included)]
+        ticker ~ [The ticker symbol of the security (unique)]
+        type ~ [Limit]
+        quantity ~ [The amount being ordered]
+        action ~ [BUY / SELL]
+        price 
+        quantity filled ~ [The amount of the order filled (may not be inlcuded)]
+        vwap ~ [The volume weighted average price for the order]
+        status ~ [ Open ]
+    - Time and Sales (TAS) for a given timestamp will have a set of market orders
+        id ~ a unique id for the transaction
+        period ~ [A unique identifier for round number , will be zero unless exchange is RIT]
+        tick ~ [A unix timestamp in seconds]
+        ticker ~ [The ticker symbol of the security (unique)]
+        quantity filled ~ [The amount sold]
+        price 
+
+
+So we need a couple of tables:
+
+securities: 
+    (PKEY) ticker ~ unique id
+    exchange ~ The exchange (either RIT, or other)
+    limit_order_rebate real,
+    trading_fee real,
+    quoted_decimals real,
+    max_trade_size real,
+    api_orders_per_second real,
+    execution_delay_ms real,
+
+book:
+    (PKEY) order_id ~ a unique id for the order
+    (PKEY) period_id ~ [A unique identifier for round number, will be zero unless exchange is RIT]
+    (PKEY) tick ~ [A unix timestamp in seconds ~ note for RIT exchange this will start from 0]
+    (PKEY) trader_id ~ [Unique id for the trader (may not be included, default is zero)]
+    (PKEY, FORIEGN_KEY) ticker ~ [The ticker symbol of the security (unique)]
+    quantity ~ [The amount being ordered]
+    (PKEY) action ~ [BUY / SELL, limit is implicitly assumed]
+    price 
+    quantity filled ~ [The amount of the order filled (may not be inlcuded)]
+    vwap ~ [The volume weighted average price for the order]
+
+tas:
+    (PKEY) market_id ~ a unique id for the transaction
+    (PKEY) period_id ~ [A unique identifier for round number , will be zero unless exchange is RIT]
+    (PKEY) tick ~ [A unix timestamp in seconds]
+    (PKEY, FORIEGN_KEY) ticker ~ [The ticker symbol of the security (unique)]
+    quantity ~ [The amount sold] 
+    price 
