@@ -4,6 +4,7 @@ from time import sleep, time
 from queue import Queue
 from threading import Thread
 import requests
+import itertools
 
 import scipy.stats as st
 import pandas as pd
@@ -11,6 +12,12 @@ import numpy as np
 from sklearn.kernel_ridge import KernelRidge
 import sys
 import math
+
+import os
+import warnings
+warnings.filterwarnings('ignore')
+
+clear = lambda: os.system('cls')
 
 API_CONFIG = './configs/api_config.json'
 SQL_CONFIG = './configs/sql_config.txt'
@@ -48,25 +55,27 @@ class TradingTick():
         return tick
 
 class Security:
-    def __init__(self, ticker, api, poll_delay=0.01):
+    def __init__(self, ticker, api, poll_delay=0.01, is_currency=False):
         self.endpoint, self.headers = api.get_source_config('RIT')
         self.ticker = ticker
         self.init_params()
         self.is_running = False
         self.poll_delay = poll_delay
+        self.is_currency = is_currency
+        self.init_time = time()
 
         self.indicators = {}
-        self.book_history = pd.DataFrame(columns=['timestamp','type','price','quantity'])
-        self.tas_history = pd.DataFrame(columns=['timestamp','id','type','price','quantity'])
-        self.best_bid_ask = pd.DataFrame(columns=['timestamp','best_bid','best_ask', 'midprice'])
+        self.book_history = pd.DataFrame(columns=['type','price','quantity'])
+        self.tas_history = pd.DataFrame(columns=['id','type','price','quantity'])
+        self.best_bid_ask = pd.DataFrame(columns=['best_bid','best_ask', 'midprice'])
 
-    def start():
-        print('[Security:%s] Started Polling...' % ticker)
+    def start(self):
+        print('[Security:%s] Started Polling...' % self.ticker)
         self.is_running = True
-        self.polling_thread = Thread(target=self.poll)
+        self.polling_thread = Thread(target=self.poll, name='Thread Security [%s]' % self.ticker)
         self.polling_thread.start()
 
-    def shutdown():
+    def shutdown(self):
         self.is_running = False
 
     def init_params(self):
@@ -74,102 +83,122 @@ class Security:
 
         if res.ok:
             spec = res.json()[0]
-            self.lo_rebate = spec['limit_order_rebate'],
-            self.mo_fee = spec['trading_fee'],
-            self.quoted_decimals = spec['quoted_decimals'],
-            self.max_trade_size = spec['max_trade_size'],
-            self.max_orders_per_second = spec['api_orders_per_second'],
+            self.lo_rebate = spec['limit_order_rebate']
+            self.mo_fee = spec['trading_fee']
+            self.quoted_decimals = spec['quoted_decimals']
+            self.max_trade_size = spec['max_trade_size']
+            self.max_orders_per_second = spec['api_orders_per_second']
             self.execution_delay_ms = spec['execution_delay_ms']
         else:
             print('[%s] Parameters could not be found!' % self.ticker)
 
     """ ------- API Polling -----------"""
     def poll(self):
-        while self.is_running:
-            # Time and sales
-            res_tas = requests.get(self.endpoint + '/securities/tas', params={'ticker': self.ticker}, headers = self.headers)
+        
+        # Time and sales
+        res_tas = requests.get(self.endpoint + '/securities/tas', params={'ticker': self.ticker}, headers = self.headers)
 
-            # Orderbook
-            res_book = requests.get(self.endpoint + '/securities/book', params={'ticker': self.ticker, 'limit': 1000}, headers = self.headers)
+        # Orderbook
+        res_book = requests.get(self.endpoint + '/securities/book', params={'ticker': self.ticker, 'limit': 1000}, headers = self.headers)
+        
+        # print('Updating... %s' % self.ticker, res_book.ok, res_tas.ok)
+        if res_book.ok and res_tas.ok:
+            book = res_book.json()
+            tas = res_tas.json()
+            # print('[SECURITY %s] Fetching from API' % self.ticker)
+            self.update_book_tas(book, tas)
 
-            if res_book.ok and res_tas.ok:
-                book = res_book.json()
-                tas = res_tas.json()
-                self.update_book_tas(book, tas)
+            if time() - self.init_time >= 20:
+                # print('[SECURITY %s] Updating Indicators' % self.ticker)
                 self.recompute_indicators()
-
-            sleep(self.poll_delay)
     
     def update_book_tas(self, book, tas):
         # Extract bid ask data from order book response
-        bids = pd.DataFrame(book['bid'])
-        asks = pd.DataFrame(book['ask'])
+        bids = pd.DataFrame(book['bids'])
+        asks = pd.DataFrame(book['asks'])
+    
         bids = bids.drop(columns=['type'])
         asks = asks.drop(columns=['type'])
         best_bid, best_ask = bids['price'][0], asks['price'][0]
         midprice = (best_bid + best_ask) / 2
-        timsetamp = time.time()
+        timestamp = time()
 
         # Update security book history for bid and ask
-        self.book_history.append({'timestamp': timsetamp, 'type':'bid', 'price': bids['price'],'quantity': bids['quantity']})
+        bids['type'] = 'bid'
+        asks['type'] = 'ask'
+        bids['timestamp'] = pd.to_datetime(timestamp, unit='s')
+        asks['timestamp'] = pd.to_datetime(timestamp, unit='s')
+        bids = bids.set_index('timestamp')
+        asks = asks.set_index('timestamp')
+        self.book_history = pd.concat([self.book_history, bids, asks])
 
-        self.book_history.append({'timestamp': timsetamp, 'type':'ask', 'price': ask['price'],'quantity': ask['quantity']})        
-        
         # Update best bid and ask
-        self.best_bid_ask.append({'timestamp':[timsetamp], 'best_bid': [best_bid], 'best_ask': [best_ask], 'midprice': [midprice]})
-
-        # Parse time and sales data 
-        tas_df = pd.DataFrame(tas)
-        tas_df['type'] = tas_df['type'] > midprice
-        tas_df['type'] = tas_df['type'].replace(to_replace={0:'BUY',1:'SELL'})
+        new_best_bid_ask = pd.DataFrame({'best_bid': best_bid, 'best_ask':best_ask, 'midprice': midprice}, index=[pd.to_datetime(timestamp, unit='s')])
+        self.best_bid_ask = pd.concat([self.best_bid_ask, new_best_bid_ask])
         
-        # We attempt to create a more high resolution timestamp than the tick 
-        # provided by ritc, we will be accurate to the +-self.poll_delay
-        existing_ids = self.tas_history['id'].unique().values
-        tas_new_entries = tas_df[~tas_df['id'].isin(existing_ids)]
+        # Parse time and sales data 
+        # Sometimes for currencies there may be no transactions 
+        if len(tas) > 0:
+            tas_df = pd.DataFrame(tas)
+            tas_df['type'] = tas_df['price'] > midprice
+            tas_df['type'] = tas_df['type'].replace(to_replace={0:'BUY',1:'SELL'})
 
-        self.tas_history.append({'id': tas_new_entries['id'], 'timestamp': timsetamp, 'type': tas_new_entries['type'], 'price': tas_new_entries['price'], 'quantity': tas_new_entries['quantity']})
+            # We attempt to create a more high resolution timestamp than the tick 
+            # provided by ritc, we will be accurate to the +-self.poll_delay
+            existing_ids = self.tas_history['id'].unique()
+            tas_new_entries = tas_df[~tas_df['id'].isin(existing_ids)]
+            tas_new_entries['timestamp'] = pd.to_datetime(timestamp, unit='s')
+
+            self.tas_history = pd.concat([self.tas_history, tas_new_entries[['id','timestamp', 'type','price','quantity']].set_index('timestamp')])
 
     def recompute_indicators(self):
         # TODO: Change these hyperparmaters appropriately to correct volumes
-        bucket_size = 50
-        vpin_results = self.compute_historical_vpin(self.tas_history, BAR_SIZE='0.1s', N_BUCKET_SIZE=bucket_size, SAMPLE_LENGTH=250)["VPIN"][-1]
+        bucket_size = 10
         vol = self.compute_historical_volatility()
 
-        self.indicators['VPIN'] = vpin_results['VPIN'].values[-1]
+        if self.is_currency == False:
+            # print('[SECURITY %s] Computing VPIN...' % self.ticker)
+            vpin_results = self.compute_historical_vpin(self.tas_history, BAR_SIZE='100ms', N_BUCKET_SIZE=bucket_size, SAMPLE_LENGTH=6)
+            # print("VPIN: %s" % vpin_results)
+            self.indicators['VPIN'] = vpin_results['VPIN'].values[-1]
+            self.indicators['order_imbalance'] = vpin_results['imbalance'].values[-1]
+            self.indicators['std_price_changes'] = vpin_results['std_price_changes'].values[-1]
+            self.indicators['std_price_changes_volume'] = bucket_size
+            self.indicators['vol_bucket_avg_duration'] = vpin_results['bucket_duration'].mean()
+            self.indicators['vol_bucket_mid_price_std'] = vpin_results['bucket_mid_prices'].std()
+        
         self.indicators['volatility'] = vol
-        self.indicators['std_price_changes'] = vpin_results['std_price_changes'].values[-1]
-        self.indicators['std_price_changes_volume'] = bucket_size
-        self.indicators['vol_bucket_avg_duration'] = vpin_results['bucket_duration'].mean()
-        self.indicators['vol_bucket_mid_price_std'] = vpin_results['bucket_mid_prices'].std()
 
     """ ------- Security State -----------"""
     def get_midprice(self):
-        return self.best_bid_ask['midprice'][-1]
+        return self.best_bid_ask['midprice'].iloc[-1]
 
     def get_bid_ask_spread(self):
-        best_bid = self.best_bid_ask['best_bid'][-1]
-        best_ask = self.best_bid_ask['best_ask'][-1]
+        best_bid = self.best_bid_ask['best_bid'].iloc[-1]
+        best_ask = self.best_bid_ask['best_ask'].iloc[-1]
 
         return best_ask - best_bid
 
     def get_best_bid_ask(self):
-        best_bid = self.best_bid_ask['best_bid'][-1]
-        best_ask = self.best_bid_ask['best_ask'][-1]
+        best_bid = self.best_bid_ask['best_bid'].iloc[-1]
+        best_ask = self.best_bid_ask['best_ask'].iloc[-1]
         
         return best_bid, best_ask
 
     def get_accumulated_transcation_volume(self, start_timestamp):
-        return self.tas_history[self.tas_history['timestamp'] > start_timestamp]['quantity'].sum()
+        return self.tas_history[self.tas_history.index > start_timestamp]['quantity'].sum()
 
-    def get_ohlc_history(self, freq='0.1s'):
+    def get_ohlc_history(self, freq='100ms'):
         """
         Gets open high low close history for security
         :param freq: frequency of time aggregation
         :returns: open high low close values aggregated at the specified frequency
         """
-        resample = self.best_bid_ask['timestamp','midprice'].resample(freq, on='timestamp')
-        ohlc = resample.agg(['first','max','min','last'])
+        print("BID ASK DF")
+        print(self.best_bid_ask[['timestamp']])
+        resample = self.best_bid_ask['midprice'].resample(freq)
+        ohlc = resample.agg(['first','max','min','last'])['midprice']
+
         ohlc.columns = ['o','h','l','c']
         return ohlc
     
@@ -177,16 +206,18 @@ class Security:
         return (self.best_bid_ask['best_ask'] - self.best_bid_ask['best_bid']).mean()
     
     """ ------- Computing VPIN -------- """
-    @staticmethod
-    def standardise_order_qty(df, target):
+    
+    def standardise_order_qty(self, df, target):
         """Takes orders of any given volume and splits them up into orders of single units.
         We do this as order volume is often misleading as large orders are often split into smaller orders
-        anyway. So it is better to standardise the size of the order to 1 and then bucket them later
+        anyway. So it is better to standardise the size of the order to 100 and then bucket them later
             :param df: contains the data to be standardised
             :param target: the name of the column thats being standardised
             :return: Dataframe of results
         """
         expanded = []
+        # print('df')
+        # print(df)
 
         filter_vol =  (df['volume'] == 0 )| (df['volume'].isna())
         df_filtered =  df[~filter_vol]
@@ -194,62 +225,65 @@ class Security:
         timestamps = df_filtered.index.values
         vols = df_filtered['volume'].values
         targets = df_filtered[target].values
-
+        # print('df_filtered')
+        # print(df_filtered)
+        # print('targets')
+        # print(targets)
         for row in zip(timestamps, vols, targets):
-            timestamp, vol, target = row
-            expanded += [(timestamp, target)] * int(vol)
+            timestamp, vol, std_value = row
+            expanded += [(timestamp, std_value)] * math.ceil(vol / 500)
 
         return pd.DataFrame.from_records(expanded, index=0)
 
-    @staticmethod
-    def compute_historical_vpin(all_trades,BAR_SIZE='1min',N_BUCKET_SIZE=50,SAMPLE_LENGTH=250):
-        """Estimates VPIN  (Volume Synchronised Probaility of Informed Trading)
+    
+    def compute_historical_vpin(self, all_trades,BAR_SIZE='1min',N_BUCKET_SIZE=10,SAMPLE_LENGTH=12):
+        """Estimates VPIN  (Volume Synchronised Probaility of Informed Trading). Apoologies if this code is a little
+        poorly written, I lifted out of a github with a working VPIN calulcation to ensure I didnt mis interpret anything
+        in the original paper
             :param all_trades: contains time and sales information in a data frame
             :param BAR_SIZE: minimum time aggregation for time and sales data
             :param N_BUCKET_SIZE: the volume in each VPIN calculation
             :param SAMPLE_LENGTH: the smoothing factor for rolling average of VPIN
             :returns {"VPIN": vpin_df, "trades_adj": trades_adj, "pct_changes_df": pct_changes_df, "std_price_changes": std_price_changes, 'bucket_duration':diffs, 'bucket_mid_prices': bucket_mid_prices}
         """
-        usd_trades = all_trades # Deprecated
-
-        volume = usd_trades['quantity']
-        trades = usd_trades['price']
-
-        def cleanup(x):
-            if isinstance(x, str) and 'e-' in x:
-                return 0
-            else:
-                return float(x)
-
-        volume = volume.apply(lambda x: cleanup(x))
-        volume = volume.astype('float32')
+        usd_trades = all_trades.copy() 
+        # print(usd_trades.tail())
+        usd_trades['type'] = usd_trades['type'].replace(to_replace={'BUY':1,'SELL':0}, regex=True)
+        # print('[VPIN %s] Num Buys: %s Num Sells: %s' % (self.ticker, usd_trades['type'].sum(), (usd_trades['type'].shape[0]-usd_trades['type'].sum()) ))
+        typestr = usd_trades[['type']]
+        volume = usd_trades[['quantity']]
+        trades = usd_trades[['price']]
+        
+        # print('[VPIN %s] Total Quantity Traded: %s' % (self.ticker, volume.sum()))
+        # print('[VPIN %s] Average Price: %s' % (self.ticker, trades.mean()))
         
         # Aggregates Volume and Price information to BAR_SIZE frequency
         # assign trade sign to 1 minute time bar by averaging buys and sells and taking the more common one
         # HUGO: Facilitates "bulk classification" of trade direction over 1 min in Probablistic terms
-        trades_resampled = trades.resample(BAR_SIZE)
+        trades_resampled = trades.resample(BAR_SIZE).sum()
+        
         trades_1min = trades_resampled.pct_change().fillna(0)
         price_changes_1min = trades_resampled.diff().fillna(0)
-        
-
         volume_1min = volume.resample(BAR_SIZE).sum()
-        typestr = (usd_trades['type'])
-        typestr_1min = typestr.astype('float32').resample(BAR_SIZE).mean().round()
-
-        df = pd.DataFrame({'type': typestr_1min, 'volume': volume_1min})
-        df_trades = pd.DataFrame({'volume': volume_1min, 'price_delta_pct': trades_1min})
+        typestr_1min = typestr.resample(BAR_SIZE).mean().round()
+        # print('[VPIN %s] STR Num Buys: %s Num Sells: %s' % (self.ticker, typestr_1min['type'].sum(), (typestr_1min['type'].shape[0]-typestr_1min['type'].sum()) ))
         
+        df = pd.concat([typestr_1min, volume_1min], axis=1)
+        df_trades = pd.concat([volume_1min, trades_1min], axis=1)
+        df.columns = ['type', 'volume']
+        df_trades.columns = ['volume', 'price_delta_pct']
+
         volume_agg_direction = df 
         price_delta_agg = df_trades
 
         # HUGO: Recall we take each 1 minute volume grouping and split it up into minimum size transaction units
         # HUGO: This ensures that we make no assumptions regarding how large orders may be submitted over time
-
         expanded = self.standardise_order_qty(df, 'type')
         std_returns_dist = self.standardise_order_qty(df_trades, 'price_delta_pct')
 
         std_order_direction = expanded
-
+        # print('[VPIN %s] Expanded prices length: %s' % (self.ticker, std_returns_dist.shape[0]))
+        # print(expanded[1].value_counts())
         # --------------- find single-period VPIN ---------------------------
         def grouper(n, iterable):
             it = iter(iterable)
@@ -260,19 +294,25 @@ class Security:
                 yield chunk
         
         OI = []
+        OI_signed = []
         start = 0 
         
         for each in grouper(N_BUCKET_SIZE, std_order_direction[1]):
             slce = pd.Series(each)
             counts = slce.value_counts()
+            # print('[VPIN %s] Order Type Cuunts in Bucket: [%s]' % (self.ticker, counts))
             if len(counts) > 1:
+                OI_signed.append((counts[1] - counts[0])/N_BUCKET_SIZE)
                 OI.append(np.abs(counts[1] - counts[0])/N_BUCKET_SIZE)
             else:
                 if 0 in counts:
+                    OI_signed.append((-1*counts[0])/N_BUCKET_SIZE)
                     OI.append(counts[0]/N_BUCKET_SIZE)
                 else:
+                    OI_signed.append((counts[1])/N_BUCKET_SIZE)
                     OI.append(counts[1]/N_BUCKET_SIZE)
 
+       
         # -------- find time boundaries for volume buckets ---------------
         buckets = []
         mid_buckets = []
@@ -295,7 +335,7 @@ class Security:
                 # Find the approximate pct change during the bucket
                 pct_changes.append(df_trades[start_idx:idx]['price_delta_pct'].sum())
                 price_changes.append(price_changes_1min[start_idx:idx].sum())
-                mid_prices.append(trades_resampled[start_idx:idx].mean())
+                bucket_mid_prices.append(trades_resampled[start_idx:idx].mean())
                 # find mid time of volume buckets
                 # find volume bucket duration
                 diff = idx - start_idx
@@ -310,16 +350,23 @@ class Security:
         # This is convenient indexing
         # HUGO: We then  adjust the original trades dataframe to have the same fill forward index 
         # as the vpin_df
+        # print("Length of OI: %s" % len(OI))
+        # print("Sample Length: %s" % SAMPLE_LENGTH)
         vpin_df = pd.Series(OI[:-1], index=mid_buckets).rolling(SAMPLE_LENGTH).mean()
-        trades_adj = trades.resample(BAR_SIZE).sum().reindex_like(vpin_df, method='ffill')
+        oi_df = pd.Series(OI_signed[:-1], index=mid_buckets).rolling(SAMPLE_LENGTH).mean()
+        # print(vpin_df.tail())
+        # Unused:
+        # trades_adj = trades.resample(BAR_SIZE).sum().reindex_like(vpin_df, method='ffill')
         pct_changes_df = pd.Series(pct_changes, index=mid_buckets)
         std_price_changes = pd.Series(price_changes, index=mid_buckets).rolling(SAMPLE_LENGTH).std()
-        
-        return {"VPIN": vpin_df, "trades_adj": trades_adj, "pct_changes_df": pct_changes_df, "std_price_changes": std_price_changes, 'bucket_duration':diffs, 'bucket_mid_prices': bucket_mid_prices}
+        # print("VPIN COMPUTED [%s]" % self.ticker)
+        return {"VPIN": vpin_df,"imbalance":oi_df, "pct_changes_df": pct_changes_df, "std_price_changes": std_price_changes, 'bucket_duration':pd.Series(diffs), 'bucket_mid_prices':pd.Series(bucket_mid_prices)}
     
     """ ------- Computing Volatility ----- """
     def compute_historical_volatility(self):
         return self.best_bid_ask['midprice'].std()
+
+
 
 class ExecutionManager():
     def __init__(self, api, tickers):
@@ -340,14 +387,17 @@ class ExecutionManager():
 
         """" Risk Management (Per Ticker) """
         self.net_positions = {ticker:0 for ticker in tickers}
+        self.net_market_making_positions = {ticker:0 for ticker in tickers}
+        self.market_making_orders = []
         
         """" Risk Limits """
         res = requests.get(self.endpoint + '/limits', headers=self.headers)
 
         if res.ok:
-            limits = res.json()
-            self.gross_limits = limits['gross_limit']
-            self.net_limits = limits['net_limit']
+            # For some reason it returns a list rather than single dict
+            limits = res.json()[0] 
+            self.gross_limit = limits['gross_limit']
+            self.net_limit = limits['net_limit']
         else:
             print('[Execution Manager] Error could not obtain position limits from API!')
 
@@ -376,20 +426,21 @@ class ExecutionManager():
     def create_order(self, ticker, order_type, action, qty, price=None):
         return {'ticker': ticker, 'type': order_type, 'action': action, 'quantity': qty, 'price': price}
 
-    def execute_orders(self, orders):
+    def execute_orders(self, order, source):
         """
         Sends orders to the RIT API, handles any POST request rate limiting by the API
         :params orders: List of json objects as specified in create_order method
+        :param source: The source of activity (MARKET_MAKER, ARBITRAGE, TENDER)
         :return order_ids: returns a list of executed order ids
         """
         executed_orders = []
-
+        
         if self.can_execute_orders(orders):
-
+            # print(["[ExecManager] Executing Orders: %s" % orders])
             # API is rate limited to 5 orders per second  
             while len(orders) > 0:
                 order = orders.pop()
-                res = requests.post(self.endpoint + '/orders', data=orders, headers = self.headers)
+                res = requests.post(self.endpoint + '/orders', params=order, headers = self.headers)
                 content = res.json()
 
                 if res.ok:
@@ -413,12 +464,17 @@ class ExecutionManager():
                         "status": "OPEN"
                     }
                     """
+                    self.market_making_orders.append(content['order_id'])
                 elif res.status_code == 429:
                     # Try again after wait time
+                    print('Error occured processing order')
+                    print(res.json())
                     sleep(content['wait'] + 0.01)
                     orders.append(order)
+                else:
+                    print(res.json())
 
-        return [order[id] for order in executed_orders]
+        return [order['order_id'] for order in executed_orders]
     
     def pull_orders(self, order_ids):
         """
@@ -428,6 +484,8 @@ class ExecutionManager():
         """
         # Ensures orders have been enqueued to the book 
         sleep(0.25)
+        # Clear console prints 
+        clear() 
         
         cancelled_ids = self.orders['CANCELLED']['order_id'].values
         transcated_ids = self.orders['TRANSACTED']['order_id'].values
@@ -505,7 +563,17 @@ class ExecutionManager():
         direction = 1 if order_details['action'][0] == "BUY" else -1
         qty_directional = qty * direction
 
+        if order_id in self.market_making_orders:
+            self.net_market_making_positions[ticker] += qty_directional
+
         self.net_positions[ticker] += qty_directional
+    
+    """ Hedging Logic """
+    def hedge_position(source):
+        if source == "MARKET_MAKING":
+            # TODO: Offload Net Position
+            pass
+    
     
     """ Order Fill Monitoring """
 
@@ -557,7 +625,7 @@ class ExecutionManager():
 
 # TODO: Set proper trading sizes for all order quantities
 class TradingManager():
-    def __init__(self, tickers, risk_aversion=0.005, enable_market_maker = True, accept_tender_orders = True, enable_arbitrage=True):
+    def __init__(self, tickers, risk_aversion=0.005, enable_market_maker = True, accept_tender_orders = True, enable_arbitrage=True, poll_delay=0.005):
         """" 
         Initialises trading manager
         param tickers: list of tickers of securties
@@ -572,6 +640,7 @@ class TradingManager():
         self.enable_market_maker = enable_market_maker
         self.accept_tender_orders = accept_tender_orders
         self.enable_arbitrage = enable_arbitrage
+        self.poll_delay = poll_delay
 
         # Request Securities price history from server
         self.api = API(API_CONFIG, DB_PATH, SQL_CONFIG, use_websocket=False)
@@ -583,77 +652,109 @@ class TradingManager():
 
     def __enter__(self):
         for ticker in self.tickers:
-            sec = Security(ticker, self.api)
-            sec.start() # Starts polling for data
-
+            sec = Security(ticker, self.api, is_currency=ticker=='USD')
             self.securities[ticker] = sec
+
+        self.poll_securities = Thread(target=self.poll_securities)
+        self.poll_securities.start()
 
         sleep(0.3) # Lets securities start polling
 
-        self.market_maker = Thread(target=self.make_markets)
-        self.market_maker.start()
+        """ Lets fix securities first!"""
+        # So this now works but we need to worry about hedging currency risk and any residual
+        # when algo not trading
+        # self.market_maker = Thread(target=self.make_markets)
+        # self.market_maker.start()
 
         self.tender_watcher = Thread(target=self.watch_for_tenders)
         self.tender_watcher.start()
 
-        self.arbitrage_searcher = Thread(target=self.search_for_arbitrage)
-        self.arbitrage_searcher.start()
+        # self.arbitrage_searcher = Thread(target=self.search_for_arbitrage)
+        # self.arbitrage_searcher.start()
 
-    def __exit__(self):
+    def __exit__(self, t, value, traceback):
         for security in self.securities:
             security.shutdown() # Stops polling, kills threads
 
         self.enable_market_maker = False
         self.accept_tender_orders = False
         self.enable_arbitrage = False
+    
+    """ Polling Securities """
+    def poll_securities(self):
+        print("[PollingSecurities] Started...")
+        for t in TradingTick(295, self.api):
+            for ticker in self.tickers:
+                self.securities[ticker].poll()
+            
+            sleep(self.poll_delay)
 
     """ ------- Market Maker ------- """
     def make_markets(self):
         market_making_order_ids = []
+        print('[MarketMaker] Started, awaiting indicators from secuirties...')
         
         # This just continues to yield ticks until it exceeds 295
         # Note consecutive t values may be the same if code completes
         # within one tick
 
-        for t in TradingTick(295):
+        for t in TradingTick(295, self.api):
             """ Market Making Logic """
             
             # Pulls any orders that haven't been executed,
             # Serves also to trigger pnl updates
             self.execution_manager.pull_orders(market_making_order_ids)
+            orders = []
 
             if not self.enable_market_maker:
                 # TODO: Any wind down logic
-                break;
+                break
 
-            for security in self.securities:
-                mid_price = security.get_midprice()
+            for sec_key in self.securities:
+                security = self.securities[sec_key]
+                # Currency's tend to be too illiquid
+                # Checking for VPIN is a quick hack to check that sufficient time has past to accurately compute indicators
+                if security.is_currency == False and 'VPIN' in security.indicators:
+                    mid_price = security.get_midprice()
 
-                # Volume Probability of Informed Trading
-                # "Flow Toxicity and Liquidity in a High-frequency World (Easley et al. 2012)"
-                vpin = security.indicators['VPIN']
+                    # Volume Probability of Informed Trading
+                    # "Flow Toxicity and Liquidity in a High-frequency World (Easley et al. 2012)"
+                    vpin = security.indicators['VPIN']
 
-                max_viable_spread = compute_max_viable_spread(security)
+                    # We're likely to get caught here by informed traders
+                    if vpin > 0.8:
+                        # TODO: Hedge expsoure if your market making activities are not viable!
+                        continue
 
-                optimal_spread = vpin * max_viable_spread
+                    print('[VPIN: %s] %.3f' %(security.ticker, vpin))
 
-                # Place Limit Orders Symmetrically 
-                spread_from_mid = optimal_spread / 2
+                    max_viable_spread = self.compute_max_viable_spread(security)
 
-                orders = []
-                orders.append(self.execution_manager.create_order(security.ticker, 'LIMIT', 'BUY', 1, mid_price - spread_from_mid))
+                    optimal_spread = vpin * max_viable_spread
 
-                orders.append(self.execution_manager.create_order(security.ticker, 'LIMIT', 'SELL', 1, mid_price + spread_from_mid))
+                    # Place Limit Orders Symmetrically 
+                    # spread_from_mid = optimal_spread / 2
 
-                # Executes 2 orders
-                market_making_order_ids = self.execution_manager.execute_orders(orders)
+                    print('[MarketMaker] Mid Price: %s Max Viable Spread: %s Optimal Spread: %s' % (mid_price, max_viable_spread, optimal_spread))
+                    
+                    # Assymetric placing of orders to ensure we don't get adversely selected as often
+                    imbalance = security.indicators['order_imbalance']
+                    spread_ask = optimal_spread * abs(imbalance) if imbalance > 0 else optimal_spread * (1-abs(imbalance))
+                    spread_bid = optimal_spread * abs(imbalance) if imbalance < 0 else optimal_spread * (1-abs(imbalance))
+                    
+                    orders.append(self.execution_manager.create_order(security.ticker, 'LIMIT', 'BUY', 1000, mid_price - spread_bid))
+
+                    orders.append(self.execution_manager.create_order(security.ticker, 'LIMIT', 'SELL', 1000, mid_price + spread_ask))
+
+                    # Executes 2 orders
+                    market_making_order_ids = self.execution_manager.execute_orders(orders)
  
     def compute_max_viable_spread(self, security):
-        # Long Run Volatility
+        # Short Term Volatility
         vol = security.indicators['volatility']
 
         # Risk Aversion Z-Score 
-        z_value = st.norm.cdf(1 - self.risk_aversion)
+        z_value = st.norm.ppf(1 - self.risk_aversion)
 
         # Computes the maximum spread at which market makers
         # will provide liquidity given their risk aversion
@@ -674,11 +775,11 @@ class TradingManager():
         position_status = 'CLOSED'
         position_cointegration = 0
 
-        for t in TradingTick(295):
+        for t in TradingTick(295, self.api):
             """ Arbitrage Logic """
             if not self.enable_arbitrage:
                 # TODO: Any wind down logic
-                break;
+                break
 
             # Recalibrate the model every 5 seconds (Arbitrary)
             if t % 5 == 0:
@@ -738,7 +839,7 @@ class TradingManager():
         This model calibration is specific to the 2020 RITC competition.
         :returns optimal_threshold: at which the spread should be traded back to equilibrium
         """
-        USD_close = self.securities['USD'].get_ohlc_history(freq="0.1s")['c']
+        USD_close = self.securities['USD'].get_ohlc_history(freq="100ms")['c']
         historical_spread, avg_slippage = self.construct_historical_spread(['BEAR','BULL'], ['RITC'], USD_close)
         probabilities = self.get_threshold_probaility_curve(historical_spread, avg_slippage)
         optimal_threshold = self.get_optimal_threshold(probabilities)
@@ -761,11 +862,11 @@ class TradingManager():
         slippages = []
 
         for ticker in leg_1:
-            leg_1_closes.append(self.securities[ticker].get_ohlc_history(freq="0.1s")['c'])
+            leg_1_closes.append(self.securities[ticker].get_ohlc_history(freq="100ms")['c'])
             slippages.append(self.securities[ticker].get_average_slippage())
 
         for ticker in leg_2:
-            leg_2_closes.append(self.securities[ticker].get_ohlc_history(freq="0.1s")['c'])
+            leg_2_closes.append(self.securities[ticker].get_ohlc_history(freq="100ms")['c'])
             slippages.append(self.securities[ticker].get_average_slippage())
         
         leg_1 = pd.concat(leg_1_closes, axis=1).sum(axis=1)
@@ -852,31 +953,32 @@ class TradingManager():
 
     def watch_for_tenders(self):
         
-        for t in TradingTick(295):
+        for t in TradingTick(295, self.api):
 
             if not self.accept_tender_orders:
                 # TODO: Any wind down logic
                 break;
 
-            res = requests.get(self.endpoint + '/tenders', headers=headers)
+            res = requests.get(self.endpoint + '/tenders', headers=self.headers)
 
             if res.ok:
-                tenders = res.json()
+                if 'VPIN' in self.securities['RITC'].indicators:
+                    tenders = res.json()
 
-                for tender in tenders:
-                    is_profitable, hiding_volume = self.process_tender_order('RITC',
-                     tender['quantity'], tender['action'], tender['price'])
+                    for tender in tenders:
+                        is_profitable, hiding_volume = self.process_tender_order('RITC',
+                        tender['quantity'], tender['action'], tender['price'])
 
-                    fake_order = self.execution_manager.create_order('RITC', 'TENDER', tender['action'], tender['quantity'], tender['price'])
+                        fake_order = self.execution_manager.create_order('RITC', 'TENDER', tender['action'], tender['quantity'], tender['price'])
 
-                    is_within_risk = self.execution_manager.can_execute_orders([fake_order])
+                        is_within_risk = self.execution_manager.can_execute_orders([fake_order])
 
-                    if is_profitable and is_within_risk:
-                        self.execution_manager.accept_tender(tender)
+                        if is_profitable and is_within_risk:
+                            self.execution_manager.accept_tender(tender)
 
-                        inverse_action = 'BUY' if tender['action'] == 'SELL' else 'SELL'
+                            inverse_action = 'BUY' if tender['action'] == 'SELL' else 'SELL'
 
-                        self.optimally_execute_order('RITC', tender['quantity'], hiding_volume, inverse_action)
+                            self.optimally_execute_order('RITC', tender['quantity'], hiding_volume, inverse_action)
 
             else:
                 print('[Tenders] Could not reach API with code %s' % res.status_code)
@@ -1005,6 +1107,7 @@ class TradingManager():
         leakage_probabililty = volume / security.max_trade_size
         
         # See "Optimal Execution Horizon, Prado, O'Hara (2015)"
+        
         vpin = security.indicators['VPIN']
         std_price_changes = security.indicators['std_price_changes'] # Note this is not true volatility,
         volume_bucket_size = security.indicators['std_price_changes_volume']
@@ -1021,12 +1124,7 @@ class TradingManager():
 
         # Computes the optimal volume to hide an order of the tender size
         # in order to minimise adverse market impact via private information leakage
-        hiding_volume = self.computeOptimalVolume(m=directional_qty,
-         phi=leakage_probabililty,
-         vB=buy_volume_percentage,
-         sigma=std_price_changes,
-         volSigma=volume_bucket_size, 
-         S_S=max_spread, K=permanent_price_impact)
+        hiding_volume = self.computeOptimalVolume(directional_qty,leakage_probabililty,buy_volume_percentage,std_price_changes,volume_bucket_size,max_spread,permanent_price_impact)
         
         # How long does an average volume bucket last (in units specified)
         vol_bucket_avg_duration = security.indicators['vol_bucket_avg_duration']
@@ -1034,7 +1132,7 @@ class TradingManager():
 
         # Basically i'm saying that the change in prices can be probabalistically bounded
         # by sqrt(t) * stdev(prices) where time is now volume buckets
-        potential_adverse_price_change = math.sqrt(hiding_buckets) * self.indicators['vol_bucket_mid_price_std'] 
+        potential_adverse_price_change = math.sqrt(hiding_buckets) * security.indicators['vol_bucket_mid_price_std'] 
 
         is_profitable = premium - potential_adverse_price_change > 0
         
@@ -1102,7 +1200,7 @@ class TradingManager():
 
     """ ------- Computing Optimal Execution Horizon -------- """
 
-    def signum(x):
+    def signum(self,x):
         """ Returns the sign of a value
         :params x: Any real number
         :returns : sign(x)
@@ -1111,7 +1209,7 @@ class TradingManager():
         elif(x > 0):return 1
         else:return 0
 
-    def getOI(v,m,phi,vB,sigma,volSigma):
+    def getOI(self, v,m,phi,vB,sigma,volSigma):
         """Gets the order imbalance using closed form derived from VPIN
         modified to encorporate leakage of private information into the market
         ie. the amount you plan to transact in small chunks
@@ -1125,7 +1223,7 @@ class TradingManager():
         """
         return phi*(float(m-(2*vB-1)*abs(m))/v+2*vB-1) + (1-phi)*(2*vB-1)
 
-    def getBounds(m,phi,vB,sigma,volSigma,S_S,zLambda,k = 0):
+    def getBounds(self, m,phi,vB,sigma,volSigma,S_S,zLambda,k = 0):
         """Computes boundaries which vB must satisfy such that the optimal
         volume to hide order V* >= m.
         :params m: The total volume you intend to trade
@@ -1138,12 +1236,12 @@ class TradingManager():
         :params K: A factor for permamanent price impact (Disabled when k=0)
         :returns : The decision boundaries on vB
         """
-        vB_l = float(signum(m)+1)/2-zLambda*sigma*abs(m)**0.5/ float(4*phi*(S_S+abs(m)*k)*volSigma**0.5)
-        vB_u = float(signum(m)+1)/2+zLambda*sigma*abs(m)**0.5/ float(4*phi*(S_S+abs(m)*k)*volSigma**0.5)
-        vB_z = (signum(m)*phi/float(phi-1)+1)/2.
+        vB_l = float(self.signum(m)+1)/2-zLambda*sigma*abs(m)**0.5/ float(4*phi*(S_S+abs(m)*k)*volSigma**0.5)
+        vB_u = float(self.signum(m)+1)/2+zLambda*sigma*abs(m)**0.5/ float(4*phi*(S_S+abs(m)*k)*volSigma**0.5)
+        vB_z = (self.signum(m)*phi/float(phi-1)+1)/2.
         return vB_l,vB_u,vB_z
 
-    def computeOptimalVolume(m,phi,vB,sigma,volSigma,S_S,zLambda,k = 0):
+    def computeOptimalVolume(self, m,phi,vB,sigma,volSigma,S_S,zLambda,k = 0):
         """Computes the optimal V* to hide an order of size and direction m in.
         :params m: The total volume you intend to trade
         :params phi: The percentage of information leakage from the private VPIN
@@ -1159,19 +1257,19 @@ class TradingManager():
         if phi<= 0:phi+= 10**-12
         if phi>= 1:phi-= 10**-12
 
-        vB_l,vB_u,vB_z = getBounds(m,phi,vB,sigma,volSigma,S_S,zLambda,k)
+        vB_l,vB_u,vB_z = self.getBounds(m,phi,vB,sigma,volSigma,S_S,zLambda,k)
 
         # try alternatives
         if (2*vB-1)*abs(m)<m:
             v1 = (2*phi*((2*vB-1)*abs(m)-m)*(S_S+abs(m)*k)*volSigma**0.5 / float(zLambda*sigma))**(2./3)
-            oi = getOI(v1,m,phi,vB,sigma,volSigma)
+            oi = self.getOI(v1,m,phi,vB,sigma,volSigma)
             if oi>0:
                 if vB<= vB_u: return v1
                 if vB>vB_u: return abs(m)
 
         elif (2*vB-1)*abs(m)>m:
             v2 = (2*phi*(m-(2*vB-1)*abs(m))*(S_S+abs(m)*k)*volSigma**0.5 / float(zLambda*sigma))**(2./3)
-            oi = getOI(v2,m,phi,vB,sigma,volSigma)
+            oi = self.getOI(v2,m,phi,vB,sigma,volSigma)
             if oi<0:
                 if vB>= vB_l: return v2
                 if vB<vB_l: return abs(m)
@@ -1221,9 +1319,9 @@ def install_thread_excepthook():
 #TODO: Get threads print statements working
 def main():
     print('reached')
-    with TradingManager(['RITC','BEAR','BULL','USD','CAD']) as tm:
+    with TradingManager(['RITC','BEAR','BULL','USD']) as tm:
         
-        for t in TradingTick(295):
+        for t in TradingTick(295,  API(API_CONFIG, DB_PATH, SQL_CONFIG, use_websocket=False)):
             pass
 
 if __name__ == '__main__':
