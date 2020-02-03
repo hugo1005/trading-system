@@ -1,0 +1,59 @@
+CREATE TABLE IF NOT EXISTS securities (
+    ticker text PRIMARY KEY,
+    exchange text NOT NULL,
+    limit_order_rebate real,
+    trading_fee real,
+    quoted_decimals real,
+    max_trade_size real,
+    api_orders_per_second real,
+    execution_delay_ms real
+);
+
+CREATE TABLE IF NOT EXISTS book (
+    order_id integer,
+    period_id int DEFAULT(0),
+    ticker text,
+    tick real,
+    action text,
+    price real,
+    quantity real,
+    quantity_filled real,
+    vwap real,
+    trader_id integer,
+    status text,
+    PRIMARY KEY (order_id, period_id, tick, ticker, action, price, quantity),
+    FOREIGN KEY (ticker) REFERENCES securities (ticker)
+);
+
+CREATE TABLE IF NOT EXISTS tas (
+    market_id integer,
+    period_id int DEFAULT(0),
+    tick real,
+    ticker integer,
+    action real,
+    quantity real NOT NULL,
+    price real NOT NULL,
+    PRIMARY KEY (market_id, period_id, tick, ticker, action),
+    FOREIGN KEY (ticker) REFERENCES securities (ticker)
+);
+
+CREATE TABLE IF NOT EXISTS book_metrics (
+    period_id int DEFAULT(0),
+    tick real,
+    ticker integer,
+    bid_d5 real,
+    bid_d10 real,
+    bid_d20 real,
+    ask_d5 real,
+    ask_d10 real,
+    ask_d20 real,
+    imbalance_d1 real,
+    imbalance_d2 real,
+    imbalance_d3 real,
+    slope real,
+    bid_ask_spread real,
+    mid_price real,
+    market_orders int DEFAULT(0),
+    PRIMARY KEY (period_id, tick, ticker)
+    FOREIGN KEY (ticker) REFERENCES securities (ticker)
+);
