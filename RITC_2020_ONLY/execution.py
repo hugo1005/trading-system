@@ -46,11 +46,12 @@ class TradingTick():
         return tick
 
 class ExecutionManager():
-    def __init__(self, api, tickers):
+    def __init__(self, api, tickers, securities):
         self.is_running = False
         self.api = api
         self.endpoint, self.headers = self.api.get_source_config('RIT')
         self.tickers = tickers
+        self.securities = securities
 
         order_properties = ["order_id", "period" "tick", "trader_id", "ticker","type","quantity","action","price","quantity_filled","vwap","status"]
 
@@ -79,7 +80,7 @@ class ExecutionManager():
 
     """ Order Execution """
     def accept_tender(self, tender):
-        accept_res = requests.post(self.endpoint + '/tenders', params={'id': tender['tender_id']}, headers=self.headers)
+        accept_res = requests.post(self.endpoint + '/tenders/%s' % tender['tender_id'], headers=self.headers)
 
         if accept_res.ok:
             print('[Tenders] Accepted : price: %s qty: %s action: %s' % (tender['price'],
@@ -98,6 +99,7 @@ class ExecutionManager():
             sleep(0.05)
         else:
             print('[AcceptTenders] Could not reach API with code %s' % accept_res.status_code)
+            print(accept_res.json())
 
     def decline_tender(self, tender):
         accept_res = requests.delete(self.endpoint + '/tenders', params={'id': tender['tender_id']}, headers=self.headers)
@@ -110,6 +112,23 @@ class ExecutionManager():
 
     def create_order(self, ticker, order_type, action, qty, price=None):
         return {'ticker': ticker, 'type': order_type, 'action': action, 'quantity': qty, 'price': price}
+
+    def split_order(self, order, max_qty):
+        """If the order is larger than the trade size limit it splits it up into multiple
+        smaller orders of maximal size
+        :param order: the order which is too large
+        :param max_qty: the maximum size of the order for the specific security
+        :return a list of smaller orders
+        """
+        print("[SPLITTER] Order was too large to submit, splitting: %s" % order)
+        original_size = order['quantity']
+        num_new_orders = math.ceil(original_size / max_qty)
+        size_new_orders = original_size / num_new_orders
+
+        new_order = self.create_order(order['ticker'], order['type'], order['action'], size_new_orders, order['price'])
+
+        return [new_order] * num_new_orders
+         
 
     def execute_orders(self, orders, source):
         """
@@ -125,6 +144,12 @@ class ExecutionManager():
             # API is rate limited to 5 orders per second  
             while len(orders) > 0:
                 order = orders.pop()
+                max_qty = self.securities[order['ticker']].max_trade_size
+                
+                if order['quantity'] > max_qty:
+                   orders += self.split_order(order, max_qty)
+                   continue
+
                 res = requests.post(self.endpoint + '/orders', params=order, headers = self.headers)
                 content = res.json()
 
@@ -161,7 +186,8 @@ class ExecutionManager():
                     orders.append(order)
                 else:
                     print(res.json())
-
+        
+        print("[Execution] Executed orders: %s" % executed_orders)
         return [order['order_id'] for order in executed_orders]
     
     def pull_orders(self, order_ids):
@@ -194,6 +220,7 @@ class ExecutionManager():
 
     def is_order_transacted(self, order_id):
         transacted_ids = self.orders['TRANSACTED']['order_id'].values
+        # print("[Execution] Order Id: %s Orders Transacted: %s" % (order_id, transacted_ids))
         return order_id in transacted_ids
 
     def get_order_filled_qty(self, order_id):
@@ -246,9 +273,9 @@ class ExecutionManager():
         
         print(order_details)
 
-        ticker = order_details['ticker'][0]
-        qty = order_details['quantity_filled'][0]
-        direction = 1 if order_details['action'][0] == "BUY" else -1
+        ticker = order_details['ticker'].iloc[0]
+        qty = order_details['quantity_filled'].iloc[0]
+        direction = 1 if order_details['action'].iloc[0] == "BUY" else -1
         qty_directional = qty * direction
 
         if order_id in self.market_making_orders:
@@ -286,7 +313,7 @@ class ExecutionManager():
     def shutdown(self):
         self.is_running = False
 
-    def poll():
+    def poll(self):
         """
         Polls the api for updates on order status (on a new thread)
         """
@@ -303,22 +330,22 @@ class ExecutionManager():
         Updates net security positions based off newly transacted orders.
         :params status: one of OPEN, CANCELLED, TRANSACTED
         """
-        res = requests.get(params={'status': status}, headers = self.headers)
-
+        res = requests.get(self.endpoint + '/orders', params={'status': status}, headers = self.headers)
+        
         if res.ok:
             orders = res.json()
 
             if len(orders) > 0:
                 updated_orders = pd.DataFrame(orders)
-                
+                updated_orders = updated_orders.rename(columns={'id':'order_id'})
                 # Handles updating of net positions (Cancelled order may have been partially filled!)
                 if status == 'TRANSACTED' or status == 'CANCELLED':
                     new_transactions_ids = list(set(updated_orders['order_id'].values).difference(set(self.orders[status]['order_id'].values)))
-
+                    
                     self.orders[status] = pd.DataFrame(orders)
 
                     for oid in new_transactions_ids:
-                        self.update_net_position(order_id)
+                        self.update_net_position(oid)
                 else:
                     self.orders[status] = pd.DataFrame(orders)
         else:

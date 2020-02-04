@@ -47,7 +47,6 @@ class TradingManager():
         # Request Securities price history from server
         self.api = API(API_CONFIG, DB_PATH, SQL_CONFIG, use_websocket=False)
         self.endpoint, self.headers = self.api.get_source_config('RIT')
-        self.execution_manager = ExecutionManager(self.api, self.tickers)
 
        
     """ ------- Trading Start / Stop -------- """
@@ -56,9 +55,12 @@ class TradingManager():
         for ticker in self.tickers:
             sec = Security(ticker, self.api, is_currency=ticker=='USD')
             self.securities[ticker] = sec
+        
+        self.execution_manager = ExecutionManager(self.api, self.tickers, self.securities)
 
         self.poll_securities = Thread(target=self.poll_securities)
         self.poll_securities.start()
+        self.execution_manager.start()
 
         sleep(0.3) # Lets securities start polling
 
@@ -386,7 +388,7 @@ class TradingManager():
 
                             inverse_action = 'BUY' if tender['action'] == 'SELL' else 'SELL'
 
-                            self.optimally_execute_order('RITC', tender['quantity'], hiding_volume, inverse_action)
+                            self.optimally_execute_order_on_new_thread('RITC', tender['quantity'], hiding_volume, inverse_action)
                         else:
                             self.execution_manager.decline_tender(tender)
             else:
@@ -435,9 +437,10 @@ class TradingManager():
         
         order_idx = 0
         
-        while transcated_volume <= volume:
+        while transcated_volume < volume:
+            print("[Tender] Pct of Qty Hedged: %.2f" % (transcated_volume/volume))
             qty = order_qty_seq[order_idx]
-            hide_in = order_hiding_volume_seq[order_seq]
+            hide_in = order_hiding_volume_seq[order_idx]
             security = self.securities[ticker]
 
             # Determine order type based on current VPIN
@@ -454,36 +457,44 @@ class TradingManager():
                 price = best_bid if action == 'BUY' else best_ask
 
             order = self.execution_manager.create_order(ticker, order_type, action, qty, price)
-            oid = self.execution_manager.execute_orders([order])[0]
+            oid = self.execution_manager.execute_orders([order], source='TENDER')[0]
             
-            execution_time = time()
+            execution_time = pd.to_datetime(time(), unit='s')
         
             # Don't do anyting until the order has been executed and
             # the total hiding volume has elapsed
-            while not self.execution_manager.is_order_transacted(oid) or security.get_accumulated_transcation_volume(execution_time) <= hide_in:
+            accumulated_volume = security.get_accumulated_transcation_volume(execution_time)
+            transacted = self.execution_manager.is_order_transacted(oid)
+            while accumulated_volume <= hide_in or not transacted:
                 sleep(0.005)
-                
+                # print(transacted)
+                # print("[TENDER] Hiding order... (pct_done: %.2f)" % (accumulated_volume/hide_in))
+
                 # We don't want our limit order slipping down the book
                 # if the price moves away from us
-                if order_type == 'LIMIT':
+                if order_type == 'LIMIT' and not transacted:
                     qty_filled = self.execution_manager.get_order_filled_qty(oid)
                     self.execution_manager.pull_orders(self, [oid])
 
                     # Need to force market order if we're not getting any traction
-                    if security.get_accumulated_transcation_volume(execution_time) > hide_in:
+                    if accumulated_volume > hide_in:
+                        print('[TENDER] Hedging order not yet executed, switching to MARKET order')
                         order_type = 'MARKET'
                         price = None
 
                         order = self.execution_manager.create_order(ticker, order_type, action, qty, price)
-                        oid = self.execution_manager.execute_orders([order])[0]
+                        oid = self.execution_manager.execute_orders([order], source='TENDER')[0]
                         break
                     else:
                         # Update the amount and chase the best price
                         best_bid, best_ask = security.get_best_bid_ask() 
                         order['price'] = best_bid if action == 'BUY' else best_ask
                         order['quantity'] -= qty_filled
+                    
+                        oid = self.execution_manager.execute_orders([order], source='TENDER')[0]
 
-                        oid = self.execution_manager.execute_orders([order])[0]
+                transacted = self.execution_manager.is_order_transacted(oid)
+                accumulated_volume = security.get_accumulated_transcation_volume(execution_time)
             
             # Move onto the next order in the sequence
             transcated_volume += qty
@@ -503,11 +514,8 @@ class TradingManager():
         best_bid, best_ask = security.get_best_bid_ask()
 
         # Compute the premium we will earn per share at current market price
-        premium = best_bid - price if action == "BUY" else price - best_ask
-
-        # Note this is the inverse, if they want us to BUY then we have to go and SELL
-        # this qty in the market
-        directional_qty = -1 * volume if action == "BUY" else volume
+        premium = best_ask - price if action == "BUY" else price - best_bid
+        directional_qty = volume if action == "BUY" else -1 * volume
         
         # Percentage of private information leaked due to our trading activity
         # Modelled as a linear function, assuming that any order of maximum size (10,000)
@@ -541,8 +549,7 @@ class TradingManager():
 
         # Basically i'm saying that the change in prices can be probabalistically bounded
         # by sqrt(t) * stdev(prices) where time is now volume buckets
-        # TODO: Fix this, i'm just using volatility which is a terrible estimator, but i just want to check the rest
-        #  actually works
+
         potential_adverse_price_change = math.sqrt(hiding_buckets * vol_bucket_avg_duration.seconds) * security.indicators['volatility'] 
         print("Potential adverse price change: %s" % potential_adverse_price_change)
         print("Premium: %s" % premium)
@@ -550,7 +557,7 @@ class TradingManager():
         
         return is_profitable, hiding_volume
     
-    def compute_hiding_volume(ticker, volume, action, permanent_price_impact = 0.00001):
+    def compute_hiding_volume(ticker, volume, action, permanent_price_impact = 0.01):
         """Computes the optimal volume to conceal the requested order
             :param ticker: A string ticker / symbol (Always going to be RITC ETF)
             :param volume: The size of the order requested on the secuirty by tender
@@ -570,9 +577,7 @@ class TradingManager():
     
         best_bid, best_ask = security.get_best_bid_ask()
 
-        # Note this is the inverse, if they want us to BUY then we have to go and SELL
-        # this qty in the market
-        directional_qty = -1 * volume if action == "BUY" else volume
+        directional_qty = volume if action == "BUY" else -1 * volume
         
         # Percentage of private information leaked due to our trading activity
         # Modelled as a linear function, assuming that any order of maximum size (10,000)
