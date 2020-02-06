@@ -8,7 +8,7 @@ from database import Database
 
 class API():
 
-    def __init__(self, api_config, db_path, db_config_path, use_websocket=False):
+    def __init__(self, api_config, db_path='', db_config_path='', use_websocket=False):
         """ Initialises API which handles data capture and providing a unified api for frontend
         :param database: A database object for data capture
         :param api_config: A relative path to the configuration file
