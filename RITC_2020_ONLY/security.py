@@ -24,6 +24,7 @@ class Security:
         self.book_history = pd.DataFrame(columns=['type','price','quantity'])
         self.tas_history = pd.DataFrame(columns=['id','type','price','quantity'])
         self.best_bid_ask = pd.DataFrame(columns=['best_bid','best_ask', 'midprice'])
+        self.position = 0
 
     def start(self):
         print('[Security:%s] Started Polling...' % self.ticker)
@@ -45,6 +46,8 @@ class Security:
             self.max_trade_size = spec['max_trade_size']
             self.max_orders_per_second = spec['api_orders_per_second']
             self.execution_delay_ms = spec['execution_delay_ms']
+
+            print('[%s] Max Trade Size: %s' % (self.ticker, self.max_trade_size))
         else:
             print('[%s] Parameters could not be found!' % self.ticker)
 
@@ -111,6 +114,12 @@ class Security:
         # TODO: Change these hyperparmaters appropriately to correct volumes
         bucket_size = 10
         vol = self.compute_historical_volatility()
+        
+        res = requests.get(self.endpoint + '/securities', params={'ticker':self.ticker}, headers=self.headers)
+        if res.ok:
+            self.position = res.json()[0]['position']
+        else:
+            print('[Indicators] Could not reach API! %s' % res.json())
 
         if self.is_currency == False:
             # print('[SECURITY %s] Computing VPIN...' % self.ticker)
@@ -140,6 +149,12 @@ class Security:
         best_ask = self.best_bid_ask['best_ask'].iloc[-1]
         
         return best_bid, best_ask
+
+    def get_net_returns(self, lookback_seconds):
+        lookback_datetime = pd.to_datetime(time() - lookback_seconds)
+        returns = self.best_bid_ask[self.best_bid_ask.index >= lookback_datetime]['midprice'].pct_change().resample('1s').sum()
+
+        return returns.sum()
 
     def get_accumulated_transcation_volume(self, start_timestamp):
         return self.tas_history[self.tas_history.index > start_timestamp]['quantity'].sum()

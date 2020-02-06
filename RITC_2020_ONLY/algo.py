@@ -357,8 +357,16 @@ class TradingManager():
     """ ------- Tenders -------- """
 
     def watch_for_tenders(self):
-        
+        has_hedged_currency = False
+
         for t in TradingTick(295, self.api):
+            
+            if t % 5 == 0:
+                if not has_hedged_currency:
+                    self.execution_manager.hedge_position('TENDER')
+                    has_hedged_currency = True
+            else:
+                has_hedged_currency = False
 
             if not self.accept_tender_orders:
                 # TODO: Any wind down logic
@@ -474,7 +482,7 @@ class TradingManager():
                 # if the price moves away from us
                 if order_type == 'LIMIT' and not transacted:
                     qty_filled = self.execution_manager.get_order_filled_qty(oid)
-                    self.execution_manager.pull_orders(self, [oid])
+                    self.execution_manager.pull_orders([oid])
 
                     # Need to force market order if we're not getting any traction
                     if accumulated_volume > hide_in:
@@ -507,7 +515,7 @@ class TradingManager():
             :param ticker: A string ticker / symbol (Always going to be RITC ETF)
             :param volume: The size of the order requested on the secuirty by tender
             :param action: The direction in which we are obliged to BUY / SELL the security and volume requested by the tender.
-            :return is_profitable, hiding_volume
+            :return is_tradable, hiding_volume
         """
         security = self.securities[ticker]
     
@@ -550,12 +558,28 @@ class TradingManager():
         # Basically i'm saying that the change in prices can be probabalistically bounded
         # by sqrt(t) * stdev(prices) where time is now volume buckets
 
-        potential_adverse_price_change = math.sqrt(hiding_buckets * vol_bucket_avg_duration.seconds) * security.indicators['volatility'] 
-        print("Potential adverse price change: %s" % potential_adverse_price_change)
+        potential_adverse_price_change = math.sqrt(hiding_buckets * vol_bucket_avg_duration.seconds) * math.sqrt(security.indicators['volatility'])
+        print("Potential adverse price change: %s Avg Bucket Duration: %s Sqrt(Volatility): %s" % (potential_adverse_price_change,vol_bucket_avg_duration.seconds , math.sqrt(security.indicators['volatility']) ))
         print("Premium: %s" % premium)
         is_profitable = premium - potential_adverse_price_change > 0
         
-        return is_profitable, hiding_volume
+        # We discover that it is insufficient to simply determine the premium
+        # We must also account for trend in prices, we will use order imbalance as typically
+        # We must react to a fairly immediate move of the market against us after we accept the tender
+        
+        oi = security.indicators['order_imbalance']
+        avg_returns = security.get_net_returns(10)
+
+        print("Order Imablance: %s" % oi)
+        print("Avg Returns: %.3f" % avg_returns)
+
+        counter_trend = avg_returns * directional_qty < 0
+        counter_trend_lead = oi * directional_qty < 0
+        # signficant_counter_trend = counter_trend and abs(avg_returns) > 
+        significant_counter_trend_lead = counter_trend_lead and abs(oi) > 0.7
+        is_tradable = is_profitable and not significant_counter_trend_lead
+
+        return is_tradable, hiding_volume
     
     def compute_hiding_volume(ticker, volume, action, permanent_price_impact = 0.01):
         """Computes the optimal volume to conceal the requested order

@@ -93,16 +93,16 @@ class ExecutionManager():
             direction = 1 if tender['action'] == "BUY" else -1
             qty_directional = qty * direction
 
-            self.net_positions[ticker] += qty_directional
+            # Note Tender is always on the ETF which is worth 2x the underlying with respect to risk limits
+            self.net_positions[ticker] += 2 * qty_directional
             
             # Just to be sure we don't accidentally front run a tender
             sleep(0.05)
         else:
-            print('[AcceptTenders] Could not reach API with code %s' % accept_res.status_code)
-            print(accept_res.json())
+            print('[AcceptTenders] Could not reach API with code %s : %s' % (accept_res.status_code, accept_res.json()))
 
     def decline_tender(self, tender):
-        accept_res = requests.delete(self.endpoint + '/tenders', params={'id': tender['tender_id']}, headers=self.headers)
+        accept_res = requests.delete(self.endpoint + '/tenders/%s' % tender['tender_id'], headers=self.headers)
 
         if accept_res.ok:
             print('[Tenders] Declined Tender : price: %s qty: %s action: %s' % (tender['price'],
@@ -187,7 +187,7 @@ class ExecutionManager():
                 else:
                     print(res.json())
         
-        print("[Execution] Executed orders: %s" % executed_orders)
+        print("[Execution] Executed orders: %s" % [order['order_id'] for order in executed_orders])
         return [order['order_id'] for order in executed_orders]
     
     def pull_orders(self, order_ids):
@@ -270,13 +270,11 @@ class ExecutionManager():
         
         # update net_positions from transacted order
         order_details = self.orders['TRANSACTED'][self.orders['TRANSACTED']['order_id'] == order_id]
-        
-        print(order_details)
 
         ticker = order_details['ticker'].iloc[0]
         qty = order_details['quantity_filled'].iloc[0]
         direction = 1 if order_details['action'].iloc[0] == "BUY" else -1
-        qty_directional = qty * direction
+        qty_directional = qty * direction if ticker != 'RITC' else 2 * qty * direction
 
         if order_id in self.market_making_orders:
             self.net_market_making_positions[ticker] += qty_directional
@@ -301,8 +299,19 @@ class ExecutionManager():
                     order = self.create_order(ticker, 'MARKET', action, net_pos)
                     self.execute_orders([order], 'MARKET_MAKER')
                     print('[Hedging] Market Making Positions Hedged')
+        if source == "TENDER":
+            
+            net_currency_exposure = self.securities['USD'].position
+            print('[Hedging] Hedging Currency Expsoure: $%s' % net_currency_exposure)
+            action = 'BUY' if net_currency_exposure < 0 else 'SELL'
+
+            if net_currency_exposure != 0:
+                    order = self.create_order('USD', 'MARKET', action, abs(net_currency_exposure))
+                    self.execute_orders([order], 'MARKET_MAKER')
+                    print('[Hedging] Hedging Currency Expsoure')
+ 
     
-    
+   
     """ Order Fill Monitoring """
 
     def start(self):
