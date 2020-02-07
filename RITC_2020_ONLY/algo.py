@@ -1,6 +1,7 @@
 from sources import API
 from security import Security
 from execution import TradingTick, ExecutionManager, OptimalTenderExecutor
+from dashboard import SecuritiesDashboard
 
 from time import sleep, time
 from queue import Queue
@@ -50,8 +51,46 @@ class TradingManager():
 
        
     """ ------- Trading Start / Stop -------- """
-
     def __enter__(self):
+        self.main_thread = Thread(target=self.launch_all_threads, name='Main Algo Thread')
+        self.main_thread.start()
+        
+        sleep(5)
+        self.securities_dashboard = SecuritiesDashboard(self.securities)
+    # def __enter__(self):
+    #     for ticker in self.tickers:
+    #         sec = Security(ticker, self.api, is_currency=ticker=='USD')
+    #         self.securities[ticker] = sec
+        
+    #     self.execution_manager = ExecutionManager(self.api, self.tickers, self.securities)
+
+    #     self.poll_securities = Thread(target=self.poll_securities)
+    #     self.poll_securities.start()
+    #     self.execution_manager.start()
+    #     sleep(1)
+
+    #     self.securities_dashboard = SecuritiesDashboard(self.securities)
+
+    #     sleep(20) # Lets securities start polling and acquire all necessary indicators
+
+    #     """ Lets fix securities first!"""
+    #     # So this now works but we need to worry about hedging currency risk and any residual
+    #     # when algo not trading
+    #     # self.market_maker = Thread(target=self.make_markets)
+    #     # self.market_maker.start()
+
+    #     # This is working decently, the only issue is the timing componet seems to be always zero
+    #     # which seems to be something to do with a zero bucket duration.... 
+    #     # This will probably work even better when thats fixed
+    #     self.tender_watcher = Thread(target=self.watch_for_tenders, name="Tender Watcher")
+    #     self.tender_watcher.start()
+
+        
+
+    #     # self.arbitrage_searcher = Thread(target=self.search_for_arbitrage)
+    #     # self.arbitrage_searcher.start()
+
+    def launch_all_threads(self):
         for ticker in self.tickers:
             sec = Security(ticker, self.api, is_currency=ticker=='USD')
             self.securities[ticker] = sec
@@ -73,11 +112,12 @@ class TradingManager():
         # This is working decently, the only issue is the timing componet seems to be always zero
         # which seems to be something to do with a zero bucket duration.... 
         # This will probably work even better when thats fixed
-        # self.tender_watcher = Thread(target=self.watch_for_tenders, name="Tender Watcher")
-        # self.tender_watcher.start()
+        self.tender_watcher = Thread(target=self.watch_for_tenders, name="Tender Watcher")
+        self.tender_watcher.start()
 
-        self.arbitrage_searcher = Thread(target=self.search_for_arbitrage)
-        self.arbitrage_searcher.start()
+        # self.arbitrage_searcher = Thread(target=self.search_for_arbitrage)
+        # self.arbitrage_searcher.start()
+
 
     def __exit__(self, t, value, traceback):
         self.enable_market_maker = False
