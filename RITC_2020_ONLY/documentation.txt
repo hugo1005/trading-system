@@ -1,0 +1,298 @@
+
+
+class ExecutionManager():
+    def __init__(self, api, tickers, securities):
+
+    """ Order Execution """
+    def accept_tender(self, tender):
+
+    def decline_tender(self, tender):
+
+    def create_order(self, ticker, order_type, action, qty, price=None):
+        return {'ticker': ticker, 'type': order_type, 'action': action, 'quantity': qty, 'price': price}
+
+    def split_order(self, order, max_qty):
+        """If the order is larger than the trade size limit it splits it up into multiple
+        smaller orders of maximal size
+        :param order: the order which is too large
+        :param max_qty: the maximum size of the order for the specific security
+        :return a list of smaller orders
+        """
+
+    def execute_orders(self, orders, source):
+        """
+        Sends orders to the RIT API, handles any POST request rate limiting by the API
+        :params orders: List of json objects as specified in create_order method
+        :param source: The source of activity (MARKET_MAKER, ARBITRAGE, TENDER)
+        :return order_ids: returns a list of executed order ids
+        """
+
+    def pull_orders(self, order_ids):
+        """
+        Pulls specified open orders from the book.
+        :param order_ids: A list of order id's, this facilitates cancelling of specific orders. Note we do not facilitate this to be left undefined to ensure
+        the good practice of tracking open orders.
+        """
+    
+    def is_order_transacted(self, order_id):
+
+    def get_order_filled_qty(self, order_id):
+
+    """ Risk Control Logic """
+
+    def can_execute_orders(self, orders):
+        """Evaluates whether a set of orders can be made without exceeding risk limits.
+        This has the advantage of centralising all risk management.
+            :param orders: List of orders
+            :return: True or False
+        """
+
+    def update_net_position(self, order_id):
+        """
+        Update net position, retrieves information about transacted order and updates the net positions.
+        :params order_id: id of order
+        """
+
+    """ Hedging Logic """
+    def hedge_position(self, source):
+        """
+        Currently doesn't handle the currency risk, but will get rid of excess
+        net net_positionsoriginating from a particular source activity
+        :param source: one of (MAKRET_MAKER, ARBITRAGE, TENDER)
+        """
+    
+    """ Order Fill Monitoring """
+
+    def start(self):
+
+    def shutdown(self):
+
+    def poll(self):
+        """
+        Polls the api for updates on order status (on a new thread)
+        """
+
+    def update_orders_for_status(self, status='OPEN'):
+        """
+        Polls the API to update our current open, closed and transcated orders.
+        Updates net security positions based off newly transacted orders.
+        :params status: one of OPEN, CANCELLED, TRANSACTED
+        """
+
+class Security:
+    def __init__(self, ticker, api, poll_delay=0.01, is_currency=False):
+
+    def start(self):
+
+    def shutdown(self):
+
+    def init_params(self):
+
+    """ ------- API Polling -----------"""
+    def poll(self): 
+        # Time and sales
+        # Orderbook
+        # print('Updating... %s' % self.ticker, res_book.ok, res_tas.ok)
+    
+    def update_book_tas(self, book, tas):
+        # Extract bid ask data from order book response
+        # Update best bid and ask
+        # Parse time and sales data 
+
+    def recompute_indicators(self):
+    
+    def compute_historical_vpin(self, all_trades,BAR_SIZE='1min',N_BUCKET_SIZE=10,SAMPLE_LENGTH=12):
+        """Estimates VPIN  (Volume Synchronised Probaility of Informed Trading). Apoologies if this code is a little
+        poorly written, I lifted out of a github with a working VPIN calulcation to ensure I didnt mis interpret anything
+        in the original paper
+            :param all_trades: contains time and sales information in a data frame
+            :param BAR_SIZE: minimum time aggregation for time and sales data
+            :param N_BUCKET_SIZE: the volume in each VPIN calculation
+            :param SAMPLE_LENGTH: the smoothing factor for rolling average of VPIN
+            :returns {"VPIN": vpin_df, "trades_adj": trades_adj, "pct_changes_df": pct_changes_df, "std_price_changes": std_price_changes, 'bucket_duration':diffs, 'bucket_mid_prices': bucket_mid_prices}
+        """
+
+    def compute_historical_volatility(self):
+
+class TradingManager():
+    def __init__(self, tickers, risk_aversion=0.005, enable_market_maker = True, accept_tender_orders = True, enable_arbitrage=True, poll_delay=0.005):
+        """" 
+        Initialises trading manager
+        param tickers: list of tickers of securties
+        param risk_aversion: probability of a loss exceeding Z(risk_aversion) standard deviations of long term volatility
+        """
+       
+    """ ------- Trading Start / Stop -------- """
+
+    def __enter__(self):
+
+    def __exit__(self, t, value, traceback):
+ 
+    """ Polling Securities """
+    def poll_securities(self):
+
+    """ ------- Market Maker ------- """
+    def make_markets(self):
+ 
+    def compute_max_viable_spread(self, security):
+
+    """ ------- Statistical Arbitrage -------- 
+    Method used described in article: https://medium.com/@hugojdolan/maths-guide-to-pairs-trading-19f793543cf7
+    Originally sourced from "Pairs Trading Quantitative Methods and Analysis (Ganapthy Vidyamurthy)" 
+    #TODO: Implement risk controls if the spread deviates massively (this is unlikely as RITC specifically
+    # states the equilibrium relationship)
+    """
+    def search_for_arbitrage(self, trading_size = 500):
+
+    def calibrate_model(self):
+        """
+        This model calibration is specific to the 2020 RITC competition.
+        :returns optimal_threshold: at which the spread should be traded back to equilibrium
+        """
+
+    def construct_historical_spread(self, leg_1, leg_2, cointegration_coeff):
+        """
+        We assume equal weighting within each leg of the portfolio. Cointegration coefficent
+        is applied to the close prices of leg_2. (Spread constructed as leg_2 - leg_1)
+        :param leg_1: a list of ticker symbols consisting of the first spread component
+        :param leg_2: a list of ticker symbols consisting of the second spread component
+        :param cointegration_coeff: a series of cointegration coefficients values or a constant
+        :return spread, avg_total_slippage: teh spread series for the ecuirties and the total average slippage
+        """
+
+    def get_spread(self, leg_1, leg_2, cointegration_coeff):
+        """
+        We assume equal weighting within each leg of the portfolio. Cointegration coefficent
+        is applied to the close prices of leg_2. (Spread constructed as leg_2 - leg_1)
+        :param leg_1: a list of ticker symbols consisting of the first spread component
+        :param leg_2: a list of ticker symbols consisting of the second spread component
+        :param cointegration_coeff: the latest value of the cointegration coefficient
+        :return spread: the current asset spread
+        """
+
+    def get_threshold_probaility_curve(historical_spread, slippage):
+        """
+        Computes a curve which estimates the probability that the spread series
+        exceeds discrete thresholds up to 3 stedevs. The curve is then smoothed
+        to ensure it is strictly decreasing and to prevent overfitting to noise.
+        :param historical_spread: The spread series for specified assets
+        :param slippage: sum of average slippages across all assets in spread
+        :return smoothed_probability_curve: Estimated of the probability of exceeding thresholds as a dataframe
+        containing columns ['threshold', 'probability']
+        """
+
+    def get_optimal_threshold(probabilities):
+
+    """ ------- Tenders -------- """
+
+    def watch_for_tenders(self):
+
+    def optimally_execute_order_on_new_thread(self, ticker, volume, hiding_volume, action,
+    num_large_orders = 3, num_proceeding_small_orders = 10, large_to_small_order_size_ratio = 5, vpin_threshold=0.6):
+        optimal_exec_thread = Thread(target=self.optimally_execute_order, 
+        args=(ticker, volume, hiding_volume, action), kwargs={"num_large_orders": num_large_orders, "num_proceeding_small_orders": num_proceeding_small_orders, "large_to_small_order_size_ratio": large_to_small_order_size_ratio, "vpin_threshold": vpin_threshold})
+
+    def optimally_execute_order(self, ticker, volume, hiding_volume, action,
+    num_large_orders = 3, num_proceeding_small_orders = 10, large_to_small_order_size_ratio = 5, vpin_threshold=0.6):
+        """
+        We need to optimally hedge our tender expsoure and execute within the 
+        hidden volume specified to minimise price impact. Our method goes as follows:
+        1) We should place larger orders spaced between smaller orders
+        in order to allow temporary price impact to recover
+        2) We should place market orders when the orderbook imbalance is against us
+        we should place limit orders when the orderbook imbalance is in our favour
+
+        :param ticker: ticker of secuirty (string)
+        :param volume: total quantity to hedge
+        :param hiding_volume: the optimal transcation volume to hide our order in
+
+        This is certaintly an area we could investigate and model more mathematically.
+        TODO: num_large_orders = 3, num_proceeding_small_orders = 10, large_to_small_order_size_ratio = 5
+        vpin_threshold=0.6 are arbitrary and should be changed to something appropriate.
+        """
+
+    # TODO: Refactor this with function compute_hiding_volume()      
+    def process_tender_order(self, ticker, volume, action, price):
+        """Evaluates a tender based on computing the optimal volume to conceal the requested order
+            and the potential 
+            :param ticker: A string ticker / symbol (Always going to be RITC ETF)
+            :param volume: The size of the order requested on the secuirty by tender
+            :param action: The direction in which we are obliged to BUY / SELL the security and volume requested by the tender.
+            :return is_profitable, hiding_volume
+        """
+    
+    def compute_hiding_volume(ticker, volume, action, permanent_price_impact = 0.01):
+        """Computes the optimal volume to conceal the requested order
+            :param ticker: A string ticker / symbol (Always going to be RITC ETF)
+            :param volume: The size of the order requested on the secuirty by tender
+            :param action: The direction in which we are obliged to BUY / SELL the security and volume requested by the tender.
+            
+            :param permanent_price_impact
+            Permanent Price Impact (Linearly expands the max_spread,
+            thus impacting the mid price in the correct direction and scales as a function of |volume|)
+            This should be tested for a range of values but if an order is somewhere in the range of 1,000
+            to 10,000 units we could reasonably expect some midprice move 1 - 20 cents 
+            so for the moment we will go with K = 0.00001 => volume = 10,000 will impact permanently
+            at around 0.10 cents
+
+            :return hiding_volume
+        """
+
+    """ ------- Computing Optimal Execution Horizon -------- """
+
+    def signum(self,x):
+        """ Returns the sign of a value
+        :params x: Any real number
+        :returns : sign(x)
+        """
+
+    def getOI(self, v,m,phi,vB,sigma,volSigma):
+        """Gets the order imbalance using closed form derived from VPIN
+        modified to encorporate leakage of private information into the market
+        ie. the amount you plan to transact in small chunks
+        :params v: Total Volume in the Bucket
+        :params m: The total volume you intend to trade
+        :params vB: The Percentage of Buy Volume in market
+        :params phi: The percentage of information leakage from the private VPIN
+        :params sigma: volatility of the mid price
+        :params volSigma: The sqrt(V/volSigma) multiplies rescales the volatility which is per unit Vol Sigma 
+        :returns : The post information leakage order imblance
+        """
+
+    def getBounds(self, m,phi,vB,sigma,volSigma,S_S,zLambda,k = 0):
+        """Computes boundaries which vB must satisfy such that the optimal
+        volume to hide order V* >= m.
+        :params m: The total volume you intend to trade
+        :params phi: The percentage of information leakage from the private VPIN
+        :params vB: The Percentage of Buy Volume in market
+        :params sigma: volatility of the mid price
+        :params volSigma: The sqrt(V/volSigma) multiplies rescales the volatility which is per unit Vol Sigma 
+        :params S_S: The expected maximum trading range in which market makers will provide liquidity
+        typically computed as the market makers risk aversion factor (zLambda) * long term volatility 
+        :params K: A factor for permamanent price impact (Disabled when k=0)
+        :returns : The decision boundaries on vB
+        """
+
+    def computeOptimalVolume(self, m,phi,vB,sigma,volSigma,S_S,zLambda,k = 0):
+        """Computes the optimal V* to hide an order of size and direction m in.
+        :params m: The total volume you intend to trade
+        :params phi: The percentage of information leakage from the private VPIN
+        :params vB: The Percentage of Buy Volume in market
+        :params sigma: volatility of the mid price
+        :params volSigma: The sqrt(V/volSigma) multiplies rescales the volatility which is per unit Vol Sigma 
+        :params S_S: The expected maximum trading range in which market makers will provide liquidity
+        typically computed as the market makers risk aversion factor (zLambda) * long term volatility 
+        :params K: A factor for permamanent price impact (Disabled when k=0)
+        :returns : The optimal hiding volume V*
+        """
+
+
+"""-------------- RUNTIME --------------"""
+def install_thread_excepthook():
+    """
+    Workaround for sys.excepthook thread bug
+    (https://sourceforge.net/tracker/?func=detail&atid=105470&aid=1230540&group_id=5470).
+    Call once from __main__ before creating any threads.
+    If using psyco, call psycho.cannotcompile(threading.Thread.run)
+    since this replaces a new-style class method.
+    """
