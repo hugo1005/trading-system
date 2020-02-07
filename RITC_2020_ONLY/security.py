@@ -123,7 +123,7 @@ class Security:
 
         if self.is_currency == False:
             # print('[SECURITY %s] Computing VPIN...' % self.ticker)
-            vpin_results = self.compute_historical_vpin(self.tas_history, BAR_SIZE='100ms', N_BUCKET_SIZE=bucket_size, SAMPLE_LENGTH=12)
+            vpin_results = self.compute_historical_vpin(self.tas_history, BAR_SIZE='10ms', N_BUCKET_SIZE=bucket_size, SAMPLE_LENGTH=12)
             # print("VPIN: %s" % vpin_results)
             self.indicators['VPIN'] = vpin_results['VPIN'].values[-1]
             self.indicators['order_imbalance'] = vpin_results['imbalance'].values[-1]
@@ -165,10 +165,10 @@ class Security:
         :param freq: frequency of time aggregation
         :returns: open high low close values aggregated at the specified frequency
         """
-        print("BID ASK DF")
-        print(self.best_bid_ask[['timestamp']])
+        # print("BID ASK DF")
+        # print(self.best_bid_ask[['timestamp']])
         resample = self.best_bid_ask['midprice'].resample(freq)
-        ohlc = resample.agg(['first','max','min','last'])['midprice']
+        ohlc = resample.agg(['first','max','min','last'])
 
         ohlc.columns = ['o','h','l','c']
         return ohlc

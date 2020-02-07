@@ -1,6 +1,6 @@
 from sources import API
 from security import Security
-from execution import TradingTick, ExecutionManager
+from execution import TradingTick, ExecutionManager, OptimalTenderExecutor
 
 from time import sleep, time
 from queue import Queue
@@ -62,7 +62,7 @@ class TradingManager():
         self.poll_securities.start()
         self.execution_manager.start()
 
-        sleep(0.3) # Lets securities start polling
+        sleep(21) # Lets securities start polling and acquire all necessary indicators
 
         """ Lets fix securities first!"""
         # So this now works but we need to worry about hedging currency risk and any residual
@@ -70,11 +70,14 @@ class TradingManager():
         # self.market_maker = Thread(target=self.make_markets)
         # self.market_maker.start()
 
-        self.tender_watcher = Thread(target=self.watch_for_tenders, name="Tender Watcher")
-        self.tender_watcher.start()
+        # This is working decently, the only issue is the timing componet seems to be always zero
+        # which seems to be something to do with a zero bucket duration.... 
+        # This will probably work even better when thats fixed
+        # self.tender_watcher = Thread(target=self.watch_for_tenders, name="Tender Watcher")
+        # self.tender_watcher.start()
 
-        # self.arbitrage_searcher = Thread(target=self.search_for_arbitrage)
-        # self.arbitrage_searcher.start()
+        self.arbitrage_searcher = Thread(target=self.search_for_arbitrage)
+        self.arbitrage_searcher.start()
 
     def __exit__(self, t, value, traceback):
         self.enable_market_maker = False
@@ -226,7 +229,7 @@ class TradingManager():
                  hiding_volume=self.compute_hiding_volume('BEAR', trading_size/2, leg_1_dir),action=leg_1_dir)
                 thread1.join()
 
-                thread3 = self.optimally_execute_order_on_new_thread('BULL',volume=trading_size/2,
+                thread2 = self.optimally_execute_order_on_new_thread('BULL',volume=trading_size/2,
                  hiding_volume=self.compute_hiding_volume('BULL', trading_size/2, leg_1_dir),action=leg_1_dir)
                 thread2.join()
 
@@ -299,13 +302,13 @@ class TradingManager():
         for ticker in leg_2:
             leg_2_prices.append(self.securities[ticker].get_midprice())
         
-        leg_1 = pd.concat(leg_1_prices, axis=1).sum(axis=1)
-        leg_2 = pd.concat(leg_2_prices, axis=1).sum(axis=1) * cointegration_coeff
+        leg_1 = sum(leg_1_prices)
+        leg_2 = sum(leg_2_prices) * cointegration_coeff
         spread = leg_2-leg_1
 
         return spread
 
-    def get_threshold_probaility_curve(historical_spread, slippage):
+    def get_threshold_probaility_curve(self,historical_spread, slippage):
         """
         Computes a curve which estimates the probability that the spread series
         exceeds discrete thresholds up to 3 stedevs. The curve is then smoothed
@@ -340,15 +343,15 @@ class TradingManager():
         # Kernel Smoothing 
         # Parameter alpha = 10**0 seems to be decent
         clf = KernelRidge(alpha=float(10)**0, kernel='rbf')
-        X, y = thresholds, threshold_probabilty_curve.values
+        X, y = thresholds.reshape((-1,1)), threshold_probabilty_curve.values.reshape((-1,))
         clf.fit(X,y)
-        smoothed_probability_curve = pd.DataFrame({'threshold':X,'probability':clf.predict(X)})
+        smoothed_probability_curve = pd.DataFrame({'threshold':X.reshape((-1,)),'probability':clf.predict(X)})
 
         return smoothed_probability_curve
 
-    def get_optimal_threshold(probabilities):
+    def get_optimal_threshold(self,probabilities):
         profit_curve = 2 * probabilities['threshold']
-        profitability = profit_curve * probabilities['probabilities']
+        profitability = profit_curve * probabilities['probability']
 
         argmax = profitability.idxmax()
 
@@ -358,6 +361,38 @@ class TradingManager():
 
     def watch_for_tenders(self):
         has_hedged_currency = False
+        optimal_tender_executor = OptimalTenderExecutor(self.execution_manager, 'RITC',
+         risk_aversion = 0.005, vpin_threshold=0.6)
+        
+        for t in TradingTick(295, self.api):
+            
+            if t % 5 == 0:
+                if not has_hedged_currency:
+                    self.execution_manager.hedge_position('TENDER')
+                    has_hedged_currency = True
+            else:
+                has_hedged_currency = False
+
+            if not self.accept_tender_orders:
+                # TODO: Any wind down logic
+                optimal_tender_executor.stop()
+                break;
+
+            res = requests.get(self.endpoint + '/tenders', headers=self.headers)
+
+            if res.ok:
+                if 'VPIN' in self.securities['RITC'].indicators:
+                    tenders = res.json()
+                    
+                    while len(tenders) > 0:
+                        tender = tenders.pop()
+                        optimal_tender_executor.add_tender_order(tender)
+            else:
+                print('[Tenders] Could not reach API with code %s' % res.status_code)
+
+    def watch_for_tenders_deprecated(self):
+        has_hedged_currency = False
+        optimal_execution_thread = None
 
         for t in TradingTick(295, self.api):
             
@@ -396,7 +431,7 @@ class TradingManager():
 
                             inverse_action = 'BUY' if tender['action'] == 'SELL' else 'SELL'
 
-                            self.optimally_execute_order_on_new_thread('RITC', tender['quantity'], hiding_volume, inverse_action)
+                            optimal_execution_thread = self.optimally_execute_order_on_new_thread('RITC', tender['quantity'], hiding_volume, inverse_action)
                         else:
                             self.execution_manager.decline_tender(tender)
             else:
@@ -581,7 +616,7 @@ class TradingManager():
 
         return is_tradable, hiding_volume
     
-    def compute_hiding_volume(ticker, volume, action, permanent_price_impact = 0.01):
+    def compute_hiding_volume(self, ticker, volume, action, permanent_price_impact = 0.01):
         """Computes the optimal volume to conceal the requested order
             :param ticker: A string ticker / symbol (Always going to be RITC ETF)
             :param volume: The size of the order requested on the secuirty by tender
@@ -626,12 +661,14 @@ class TradingManager():
 
         # Computes the optimal volume to hide an order of the tender size
         # in order to minimise adverse market impact via private information leakage
+        z_value = st.norm.ppf(1 - self.risk_aversion)
+
         hiding_volume = self.computeOptimalVolume(m=directional_qty,
          phi=leakage_probabililty,
          vB=buy_volume_percentage,
          sigma=std_price_changes,
          volSigma=volume_bucket_size, 
-         S_S=max_spread, K=permanent_price_impact)
+         S_S=max_spread,zLambda=z_value, k=permanent_price_impact)
         
         # How long does an average volume bucket last (in units specified)
         vol_bucket_avg_duration = security.indicators['vol_bucket_avg_duration']
