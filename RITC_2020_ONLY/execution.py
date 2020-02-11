@@ -301,12 +301,12 @@ class ExecutionManager():
                     order = self.create_order(ticker, 'MARKET', action, net_pos)
                     self.execute_orders([order], 'MARKET_MAKER')
                     print('[Hedging] Market Making Positions Hedged')
-        if source == "TENDER":
+        if source == "TENDER" or source == "ARBITRAGE":
             
             net_currency_exposure = self.securities['USD'].position
-            # print('[Hedging] Hedging Currency Expsoure: $%s' % net_currency_exposure)
+            print('[Hedging] Hedging Currency Expsoure: $%s' % net_currency_exposure)
             action = 'BUY' if net_currency_exposure < 0 else 'SELL'
-
+            
             if net_currency_exposure != 0:
                     order = self.create_order('USD', 'MARKET', action, abs(net_currency_exposure))
                     self.execute_orders([order], 'MARKET_MAKER')
@@ -361,7 +361,6 @@ class ExecutionManager():
                     self.orders[status] = pd.DataFrame(orders)
         else:
             print('[ExecutionManager] Polling response failed with code: %s' % res.status_code)
-
 
 class OptimalTenderExecutor:
     def __init__(self, execution_manager, ticker, num_large_orders = 3, num_proceeding_small_orders = 10,
@@ -535,6 +534,422 @@ class OptimalTenderExecutor:
                 # Move onto the next order in the sequence
                 self.volume_transacted += qty
                 self.order_idx += 1 
+    
+
+    
+
+    def process_tender_order(self, ticker, volume, action, price):
+        """Evaluates a tender based on computing the optimal volume to conceal the requested order
+            and the potential 
+            :param ticker: A string ticker / symbol (Always going to be RITC ETF)
+            :param volume: The size of the order requested on the secuirty by tender
+            :param action: The direction in which we are obliged to BUY / SELL the security and volume requested by the tender.
+            :return is_tradable, hiding_volume
+        """
+        security = self.execution_manager.securities[ticker]
+    
+        best_bid, best_ask = security.get_best_bid_ask()
+
+        # Compute the premium we will earn per share at current market price
+        premium = best_ask - price if action == "BUY" else price - best_bid
+        directional_qty = volume if action == "BUY" else -1 * volume
+        
+        # Percentage of private information leaked due to our trading activity
+        # Modelled as a linear function, assuming that any order of maximum size (10,000)
+        # will reveal our intentions in their entirety
+        # From last years charts this seems reasonable (Can be adjusted if necessary)
+        leakage_probabililty = volume / security.max_trade_size
+        
+        # See "Optimal Execution Horizon, Prado, O'Hara (2015)"
+        
+        vpin = security.indicators['VPIN']
+        std_price_changes = security.indicators['std_price_changes'] # Note this is not true volatility,
+        volume_bucket_size = security.indicators['std_price_changes_volume']
+        buy_volume_percentage =  (vpin + 1) / 2
+        max_spread = self.compute_max_viable_spread(security)
+        
+        # Permanent Price Impact (Linearly expands the max_spread,
+        # thus impacting the mid price in the correct direction and scales as a function of |volume|)
+        # This should be tested for a range of values but if an order is somewhere in the range of 1,000
+        # to 10,000 units we could reasonably expect some midprice move 1 - 20 cents 
+        # so for the moment we will go with K = 0.00001 => volume = 10,000 will impact permanently
+        # at around 0.10 cents
+        permanent_price_impact = 0.00001
+
+        # Computes the optimal volume to hide an order of the tender size
+        # in order to minimise adverse market impact via private information leakage
+        hiding_volume = self.computeOptimalVolume(directional_qty,leakage_probabililty,buy_volume_percentage,std_price_changes,volume_bucket_size,max_spread,permanent_price_impact)
+        
+        # How long does an average volume bucket last (in units specified)
+        vol_bucket_avg_duration = security.indicators['vol_bucket_avg_duration']
+        hiding_buckets = hiding_volume / volume_bucket_size
+
+        # Basically i'm saying that the change in prices can be probabalistically bounded
+        # by sqrt(t) * stdev(prices) where time is now volume buckets
+
+        potential_adverse_price_change = math.sqrt(hiding_buckets * vol_bucket_avg_duration.seconds) * math.sqrt(security.indicators['volatility'])
+        print("Potential adverse price change: %s Avg Bucket Duration: %s Sqrt(Volatility): %s" % (potential_adverse_price_change,vol_bucket_avg_duration.seconds , math.sqrt(security.indicators['volatility']) ))
+        print("Premium: %s" % premium)
+        is_profitable = premium - potential_adverse_price_change > 0
+        
+        # We discover that it is insufficient to simply determine the premium
+        # We must also account for trend in prices, we will use order imbalance as typically
+        # We must react to a fairly immediate move of the market against us after we accept the tender
+        
+        oi = security.indicators['order_imbalance']
+        avg_returns = security.get_net_returns(10)
+
+        print("Order Imablance: %s" % oi)
+        print("Avg Returns: %.3f" % avg_returns)
+
+        counter_trend = avg_returns * directional_qty < 0
+        counter_trend_lead = oi * directional_qty < 0
+        # signficant_counter_trend = counter_trend and abs(avg_returns) > 
+        significant_counter_trend_lead = counter_trend_lead and abs(oi) > 0.7
+        is_tradable = is_profitable and not significant_counter_trend_lead
+
+        return is_tradable, hiding_volume
+    
+    def compute_hiding_volume(self, ticker, volume, action, permanent_price_impact = 0.01):
+        """Computes the optimal volume to conceal the requested order
+            :param ticker: A string ticker / symbol (Always going to be RITC ETF)
+            :param volume: The size of the order requested on the secuirty by tender
+            :param action: The direction in which we are obliged to BUY / SELL the security and volume requested by the tender.
+            
+            :param permanent_price_impact
+            Permanent Price Impact (Linearly expands the max_spread,
+            thus impacting the mid price in the correct direction and scales as a function of |volume|)
+            This should be tested for a range of values but if an order is somewhere in the range of 1,000
+            to 10,000 units we could reasonably expect some midprice move 1 - 20 cents 
+            so for the moment we will go with K = 0.00001 => volume = 10,000 will impact permanently
+            at around 0.10 cents
+
+            :return hiding_volume
+        """
+        security = self.execution_manager.securities[ticker]
+    
+        best_bid, best_ask = security.get_best_bid_ask()
+
+        directional_qty = volume if action == "BUY" else -1 * volume
+        
+        # Percentage of private information leaked due to our trading activity
+        # Modelled as a linear function, assuming that any order of maximum size (10,000)
+        # will reveal our intentions in their entirety
+        # From last years charts this seems reasonable (Can be adjusted if necessary)
+        leakage_probabililty = volume / security.max_trade_size
+        
+        # See "Optimal Execution Horizon, Prado, O'Hara (2015)"
+        vpin = security.indicators['VPIN']
+        std_price_changes = security.indicators['std_price_changes'] # Note this is not true volatility,
+        volume_bucket_size = security.indicators['std_price_changes_volume']
+        buy_volume_percentage =  (vpin + 1) / 2
+        max_spread = self.compute_max_viable_spread(security)
+        
+        # Permanent Price Impact (Linearly expands the max_spread,
+        # thus impacting the mid price in the correct direction and scales as a function of |volume|)
+        # This should be tested for a range of values but if an order is somewhere in the range of 1,000
+        # to 10,000 units we could reasonably expect some midprice move 1 - 20 cents 
+        # so for the moment we will go with K = 0.00001 => volume = 10,000 will impact permanently
+        # at around 0.10 cents
+        permanent_price_impact = 0.00001
+
+        # Computes the optimal volume to hide an order of the tender size
+        # in order to minimise adverse market impact via private information leakage
+        hiding_volume = self.computeOptimalVolume(m=directional_qty,
+         phi=leakage_probabililty,
+         vB=buy_volume_percentage,
+         sigma=std_price_changes,
+         volSigma=volume_bucket_size, 
+         S_S=max_spread, K=permanent_price_impact)
+        
+        # How long does an average volume bucket last (in units specified)
+        vol_bucket_avg_duration = security.indicators['vol_bucket_avg_duration']
+        hiding_buckets = hiding_volume / volume_bucket_size
+
+        return hiding_volume
+
+    """ ------- Computing Optimal Execution Horizon -------- """
+    def compute_max_viable_spread(self, security):
+        # Short Term Volatility
+        vol = security.indicators['volatility']
+
+        # Risk Aversion Z-Score 
+        z_value = st.norm.ppf(1 - self.risk_aversion)
+
+        # Computes the maximum spread at which market makers
+        # will provide liquidity given their risk aversion
+        # The general idea is that higher vol means wider spread
+        max_viable_spread = z_value * vol 
+
+        return max_viable_spread
+
+    def signum(self,x):
+        """ Returns the sign of a value
+        :params x: Any real number
+        :returns : sign(x)
+        """
+        if(x < 0):return -1
+        elif(x > 0):return 1
+        else:return 0
+
+    def getOI(self, v,m,phi,vB,sigma,volSigma):
+        """Gets the order imbalance using closed form derived from VPIN
+        modified to encorporate leakage of private information into the market
+        ie. the amount you plan to transact in small chunks
+        :params v: Total Volume in the Bucket
+        :params m: The total volume you intend to trade
+        :params vB: The Percentage of Buy Volume in market
+        :params phi: The percentage of information leakage from the private VPIN
+        :params sigma: volatility of the mid price
+        :params volSigma: The sqrt(V/volSigma) multiplies rescales the volatility which is per unit Vol Sigma 
+        :returns : The post information leakage order imblance
+        """
+        return phi*(float(m-(2*vB-1)*abs(m))/v+2*vB-1) + (1-phi)*(2*vB-1)
+
+    def getBounds(self, m,phi,vB,sigma,volSigma,S_S,zLambda,k = 0):
+        """Computes boundaries which vB must satisfy such that the optimal
+        volume to hide order V* >= m.
+        :params m: The total volume you intend to trade
+        :params phi: The percentage of information leakage from the private VPIN
+        :params vB: The Percentage of Buy Volume in market
+        :params sigma: volatility of the mid price
+        :params volSigma: The sqrt(V/volSigma) multiplies rescales the volatility which is per unit Vol Sigma 
+        :params S_S: The expected maximum trading range in which market makers will provide liquidity
+        typically computed as the market makers risk aversion factor (zLambda) * long term volatility 
+        :params K: A factor for permamanent price impact (Disabled when k=0)
+        :returns : The decision boundaries on vB
+        """
+        vB_l = float(self.signum(m)+1)/2-zLambda*sigma*abs(m)**0.5/ float(4*phi*(S_S+abs(m)*k)*volSigma**0.5)
+        vB_u = float(self.signum(m)+1)/2+zLambda*sigma*abs(m)**0.5/ float(4*phi*(S_S+abs(m)*k)*volSigma**0.5)
+        vB_z = (self.signum(m)*phi/float(phi-1)+1)/2.
+        return vB_l,vB_u,vB_z
+
+    def computeOptimalVolume(self, m,phi,vB,sigma,volSigma,S_S,zLambda,k = 0):
+        """Computes the optimal V* to hide an order of size and direction m in.
+        :params m: The total volume you intend to trade
+        :params phi: The percentage of information leakage from the private VPIN
+        :params vB: The Percentage of Buy Volume in market
+        :params sigma: volatility of the mid price
+        :params volSigma: The sqrt(V/volSigma) multiplies rescales the volatility which is per unit Vol Sigma 
+        :params S_S: The expected maximum trading range in which market makers will provide liquidity
+        typically computed as the market makers risk aversion factor (zLambda) * long term volatility 
+        :params K: A factor for permamanent price impact (Disabled when k=0)
+        :returns : The optimal hiding volume V*
+        """
+        # compute vB boundaries:
+        if phi<= 0:phi+= 10**-12
+        if phi>= 1:phi-= 10**-12
+
+        vB_l,vB_u,vB_z = self.getBounds(m,phi,vB,sigma,volSigma,S_S,zLambda,k)
+
+        # try alternatives
+        if (2*vB-1)*abs(m)<m:
+            v1 = (2*phi*((2*vB-1)*abs(m)-m)*(S_S+abs(m)*k)*volSigma**0.5 / float(zLambda*sigma))**(2./3)
+            oi = self.getOI(v1,m,phi,vB,sigma,volSigma)
+            if oi>0:
+                if vB<= vB_u: return v1
+                if vB>vB_u: return abs(m)
+
+        elif (2*vB-1)*abs(m)>m:
+            v2 = (2*phi*(m-(2*vB-1)*abs(m))*(S_S+abs(m)*k)*volSigma**0.5 / float(zLambda*sigma))**(2./3)
+            oi = self.getOI(v2,m,phi,vB,sigma,volSigma)
+            if oi<0:
+                if vB>= vB_l: return v2
+                if vB<vB_l: return abs(m)
+                
+        elif (2*vB-1)*abs(m) == m: return abs(m)
+
+        if m<0:
+            if vB<vB_z: return phi*(abs(m)-m/float(2*vB-1))
+            if vB>= vB_z: return abs(m)
+        else:
+            if vB>= vB_z: return phi*(abs(m)-m/float(2*vB-1))
+            if vB<vB_z: return abs(m)
+
+    """ ------- Deprecated -------- """
+    
+class OptimalArbitrageExecutor:
+    def __init__(self, execution_manager, tickers, trading_size, num_large_orders = 3, num_proceeding_small_orders = 10,
+     large_to_small_order_size_ratio = 5, vpin_threshold=0.6, risk_aversion=0.005):
+        self.execution_manager = execution_manager
+        self.api = self.execution_manager.api
+
+        # Optimality Parameters
+        self.num_large_orders = num_large_orders
+        self.num_proceeding_small_orders = num_proceeding_small_orders
+        self.large_to_small_order_size_ratio = large_to_small_order_size_ratio
+        self.vpin_threshold = vpin_threshold
+        self.risk_aversion = risk_aversion
+        self.trading_size = trading_size
+
+        # Live Trade Execution tracking
+        self.tracking = {}
+
+        # Start Trading Thread
+        self.can_execute = True
+
+        for ticker in tickers:
+            self.tracking[ticker] = {
+                'volume_transacted': 0,
+                'net_position': 0,
+                'hiding_volume': 0,
+                'net_action': 'BUY',
+                'thread': Thread(target=self.optimally_execute, args=(ticker))
+            }
+
+            # Compute Trading Params
+            self.compute_execution_params(ticker)
+
+            # Start Optimally Trading
+            self.tracking[ticker]['thread'].start()
+        
+    def stop(self):
+        self.can_execute = False
+
+    def close_arbitrage_position(self):
+        orders = []
+        
+        for ticker in self.tracking:
+            track = self.tracking[ticker]
+            closing_action = 'SELL' if track['net_action'] == 'BUY' else 'BUY'
+            qty = track['volume_transacted']
+            
+            if qty > 0:
+                order = self.execution_manager.create_order(ticker, 'MARKET', closing_action, qty)
+                orders.append(order)
+
+        self.execution_manager.execute_orders(orders, 'ARBITRAGE')
+
+    def open_arbitrage_position(self, cointegration_coeff, leg_1_dir, leg_2_dir):
+        """ 
+        Opens positions on prespecified hardcoded securities
+        """
+        bear = self.tracking['BEAR']
+        bull = self.tracking['BULL']
+        ritc = self.tracking['RITC']
+
+        #  Todo close out any net positions with market orders
+        self.close_arbitrage_position()
+
+        for ticker in self.tracking:
+            qty = self.trading_size if ticker == 'RITC' else self.trading_size / 2
+            action = leg_2_dir if ticker == 'RITC' else leg_1_dir
+            directional_qty = qty * -1 if action == 'SELL' else qty
+            
+            track = self.tracking[ticker] 
+
+            track['volume_transacted'] = 0
+            track['net_position'] = directional_qty
+            track['hiding_volume'] = self.compute_hiding_volume(ticker, trade_size, action)
+            track['net_action'] = action
+
+            # Compute Trading Params
+            self.compute_execution_params(ticker)
+    
+    def compute_execution_params(self, ticker):
+            # Compute the size of a small volume unit
+            # Note a large trade is "large_to_small_order_size_ratio" trading units
+            track = self.tracking[ticker]
+            track['volume'] = abs(track['net_position'])
+            self.num_trading_units = self.num_large_orders * (self.large_to_small_order_size_ratio + self.num_proceeding_small_orders)
+            track['trading_unit_volume'] = track['volume'] / self.num_trading_units
+            track['trading_unit_hiding_volume'] = track['hiding_volume'] / self.num_trading_units
+
+            # Define the sequence of order quantities and their corresponding hiding quantities
+            track['order_qty_seq'] = ([track['trading_unit_volume'] * self.large_to_small_order_size_ratio] + ([track['trading_unit_volume']] * self.num_proceeding_small_orders)) * self.num_large_orders
+
+            track['order_hiding_volume_seq'] = ([track['trading_unit_hiding_volume'] * self.large_to_small_order_size_ratio] + (track['trading_unit_hiding_volume'] * self.num_proceeding_small_orders)) * self.num_large_orders
+            
+            track['order_idx'] = 0
+
+            print("[Arbitrage Optimal Executor] Params Updated [%s] - Net Position: %s Volume: %s Action: %s Transacted: %s" % (ticker, track['net_position'], track['volume'], track['net_action'], track['volume_transacted']))
+
+    def optimally_execute(self, ticker):
+        track = self.tracking[ticker]
+
+        for t in TradingTick(295, self.api):
+                """
+                We need to optimally hedge our tender expsoure and execute within the 
+                hidden volume specified to minimise price impact. Our method goes as follows:
+                1) We should place larger orders spaced between smaller orders
+                in order to allow temporary price impact to recover
+                2) We should place market orders when the orderbook imbalance is against us
+                we should place limit orders when the orderbook imbalance is in our favour
+
+                :param ticker: ticker of secuirty (string)
+                :param volume: total quantity to hedge
+                :param hiding_volume: the optimal transcation volume to hide our order in
+
+                This is certaintly an area we could investigate and model more mathematically.
+                TODO: num_large_orders = 3, num_proceeding_small_orders = 10, large_to_small_order_size_ratio = 5
+                vpin_threshold=0.6 are arbitrary and should be changed to something appropriate.
+                """
+
+                if not self.can_execute:
+                    break
+
+                if track['volume_transacted'] < track['volume']:
+                    print("[Tender] Pct of Qty Hedged: %.2f" % (self.volume_transacted/self.volume))
+                    qty = track['order_qty_seq'][track['order_idx']]
+                    hide_in = track['order_hiding_volume_seq'][track['order_idx']]
+                    security = self.execution_manager.securities[ticker]
+
+                    # Determine order type based on current VPIN
+                    # If VPIN is high we go to market because someone else 
+                    # is quite likely to adversely select us.
+                    vpin = security.indicators['VPIN']
+                    
+                    if vpin > self.vpin_threshold:
+                        order_type = 'MARKET'
+                        price = None
+                    else:
+                        order_type = 'LIMIT'
+                        best_bid, best_ask = security.get_best_bid_ask()         
+                        price = best_bid if action == 'BUY' else best_ask
+
+                    order = self.execution_manager.create_order(ticker, order_type, track['net_action'], qty, price)
+                    oid = self.execution_manager.execute_orders([order], source='ARBITRAGE')[0]
+                    
+                    execution_time = pd.to_datetime(time(), unit='s')
+                
+                    # Don't do anyting until the order has been executed and
+                    # the total hiding volume has elapsed
+                    accumulated_volume = security.get_accumulated_transcation_volume(execution_time)
+                    transacted = self.execution_manager.is_order_transacted(oid)
+                    while accumulated_volume <= hide_in or not transacted:
+                        sleep(0.005)
+                        # print(transacted)
+                        # print("[TENDER] Hiding order... (pct_done: %.2f)" % (accumulated_volume/hide_in))
+
+                        # We don't want our limit order slipping down the book
+                        # if the price moves away from us
+                        if order_type == 'LIMIT' and not transacted:
+                            qty_filled = self.execution_manager.get_order_filled_qty(oid)
+                            self.execution_manager.pull_orders([oid])
+
+                            # Need to force market order if we're not getting any traction
+                            if accumulated_volume > hide_in:
+                                print('[TENDER] Hedging order not yet executed, switching to MARKET order')
+                                order_type = 'MARKET'
+                                price = None
+
+                                order = self.execution_manager.create_order(ticker, order_type, track['net_action'], qty, price)
+                                oid = self.execution_manager.execute_orders([order], source='ARBITRAGE')[0]
+                                break
+                            else:
+                                # Update the amount and chase the best price
+                                best_bid, best_ask = security.get_best_bid_ask() 
+                                order['price'] = best_bid if action == 'BUY' else best_ask
+                                order['quantity'] -= qty_filled
+                            
+                                oid = self.execution_manager.execute_orders([order], source='ARBITRAGE')[0]
+
+                        transacted = self.execution_manager.is_order_transacted(oid)
+                        accumulated_volume = security.get_accumulated_transcation_volume(execution_time)
+                    
+                    # Move onto the next order in the sequence
+                    track['volume_transacted'] += qty
+                    track['order_idx'] += 1 
     
 
     

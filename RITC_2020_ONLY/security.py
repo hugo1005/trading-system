@@ -173,6 +173,18 @@ class Security:
         ohlc.columns = ['o','h','l','c']
         return ohlc
     
+    def get_midprice_history(self, freq='100ms'):
+        """
+        Gets open high low close history for security
+        :param freq: frequency of time aggregation
+        :returns: open high low close values aggregated at the specified frequency
+        """
+        # print("BID ASK DF")
+        # print(self.best_bid_ask[['timestamp']])
+        resample = self.best_bid_ask['midprice'].resample(freq).mean()
+
+        return resample
+
     def get_average_slippage(self):
         return (self.best_bid_ask['best_ask'] - self.best_bid_ask['best_bid']).mean()
     

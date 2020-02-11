@@ -1,7 +1,7 @@
 from sources import API
 from security import Security
-from execution import TradingTick, ExecutionManager, OptimalTenderExecutor
-from dashboard import SecuritiesDashboard
+from execution import TradingTick, ExecutionManager, OptimalTenderExecutor, OptimalArbitrageExecutor
+from dashboard import SecuritiesDashboard, SpreadDashboard
 
 from time import sleep, time
 from queue import Queue
@@ -13,6 +13,7 @@ import scipy.stats as st
 import pandas as pd
 import numpy as np
 from sklearn.kernel_ridge import KernelRidge
+import matplotlib.pyplot as plt
 import sys
 import math
 
@@ -56,39 +57,10 @@ class TradingManager():
         self.main_thread.start()
         
         sleep(5)
-        self.securities_dashboard = SecuritiesDashboard(self.securities)
-    # def __enter__(self):
-    #     for ticker in self.tickers:
-    #         sec = Security(ticker, self.api, is_currency=ticker=='USD')
-    #         self.securities[ticker] = sec
         
-    #     self.execution_manager = ExecutionManager(self.api, self.tickers, self.securities)
-
-    #     self.poll_securities = Thread(target=self.poll_securities)
-    #     self.poll_securities.start()
-    #     self.execution_manager.start()
-    #     sleep(1)
-
-    #     self.securities_dashboard = SecuritiesDashboard(self.securities)
-
-    #     sleep(20) # Lets securities start polling and acquire all necessary indicators
-
-    #     """ Lets fix securities first!"""
-    #     # So this now works but we need to worry about hedging currency risk and any residual
-    #     # when algo not trading
-    #     # self.market_maker = Thread(target=self.make_markets)
-    #     # self.market_maker.start()
-
-    #     # This is working decently, the only issue is the timing componet seems to be always zero
-    #     # which seems to be something to do with a zero bucket duration.... 
-    #     # This will probably work even better when thats fixed
-    #     self.tender_watcher = Thread(target=self.watch_for_tenders, name="Tender Watcher")
-    #     self.tender_watcher.start()
-
-        
-
-    #     # self.arbitrage_searcher = Thread(target=self.search_for_arbitrage)
-    #     # self.arbitrage_searcher.start()
+        # self.securities_dashboard = SecuritiesDashboard(self.securities)
+        self.securities_dashboard = SpreadDashboard([self.securities['BULL'], self.securities['BEAR']],
+         [self.securities['RITC']], self.securities['USD'].get_midprice)
 
     def launch_all_threads(self):
         for ticker in self.tickers:
@@ -112,11 +84,11 @@ class TradingManager():
         # This is working decently, the only issue is the timing componet seems to be always zero
         # which seems to be something to do with a zero bucket duration.... 
         # This will probably work even better when thats fixed
-        self.tender_watcher = Thread(target=self.watch_for_tenders, name="Tender Watcher")
-        self.tender_watcher.start()
+        # self.tender_watcher = Thread(target=self.watch_for_tenders, name="Tender Watcher")
+        # self.tender_watcher.start()
 
-        # self.arbitrage_searcher = Thread(target=self.search_for_arbitrage)
-        # self.arbitrage_searcher.start()
+        self.arbitrage_searcher = Thread(target=self.search_for_arbitrage)
+        self.arbitrage_searcher.start()
 
 
     def __exit__(self, t, value, traceback):
@@ -217,21 +189,32 @@ class TradingManager():
     #TODO: Implement risk controls if the spread deviates massively (this is unlikely as RITC specifically
     # states the equilibrium relationship)
     """
-    def search_for_arbitrage(self, trading_size = 500):
+    def search_for_arbitrage(self, trading_size = 10000):
         optimal_threshold = self.calibrate_model()
         last_spread = None
         position_status = 'CLOSED'
         position_cointegration = 0
+        position_threshold = 0
+        position_spread = 0
+        last_calibration = time()
+        last_hedge = time()
+
+        optimal_arb_executor = OptimalArbitrageExecutor(self.execution_manager, ['BEAR', 'BULL', 'RITC'], trading_size)
 
         for t in TradingTick(295, self.api):
             """ Arbitrage Logic """
             if not self.enable_arbitrage:
                 # TODO: Any wind down logic
                 break
+            
+            if time() - last_hedge > 3:
+                self.execution_manager.hedge_position('ARBITRAGE')
+                last_hedge = time()
 
             # Recalibrate the model every 5 seconds (Arbitrary)
-            if t % 5 == 0:
+            if time() - last_calibration > 5:
                 optimal_threshold = self.calibrate_model()
+                last_calibration = time()
 
             # ----- Note this has been hardcoded for the RITC 2020 competition ------
             cointegration_coeff = self.securities['USD'].get_midprice()
@@ -241,44 +224,66 @@ class TradingManager():
                 leg_1_dir = 'BUY' if spread > 0 else 'SELL'
                 leg_2_dir = 'SELL' if spread > 0 else 'BUY'
 
+                print("[STAT ARB] Entering Position, Spread: %s Optimal Threshold: %s \n Leg 1 (BULL, BEAR): %s Leg 2 (RITC): %s Cointegration Coeff: %s" % (
+                    spread, optimal_threshold, leg_1_dir, leg_2_dir, cointegration_coeff))
+
+                # order_bear = self.execution_manager.create_order('BEAR', 'MARKET', leg_1_dir, trading_size/2)
+                # order_bull = self.execution_manager.create_order('BULL', 'MARKET', leg_1_dir, trading_size/2)
+                # order_ritc = self.execution_manager.create_order('RITC', 'MARKET', leg_2_dir, trading_size * cointegration_coeff)
+                # self.execution_manager.execute_orders([order_bear,order_bull,order_ritc], 'ARBITRAGE')
                 # We execute on new threads to ensure simulataneous position entry
                 # Don't procede until all positions have been executed (.join())
-                thread1 = self.optimally_execute_order_on_new_thread('BEAR',volume=trading_size/2,
-                 hiding_volume=self.compute_hiding_volume('BEAR', trading_size/2, leg_1_dir),action=leg_1_dir)
-                thread1.join()
+                # thread1 = self.optimally_execute_order_on_new_thread('BEAR',volume=trading_size/2,
+                #  hiding_volume=self.compute_hiding_volume('BEAR', trading_size/2, leg_1_dir),action=leg_1_dir)
+                # # thread1.join()
 
-                thread2 = self.optimally_execute_order_on_new_thread('BULL',volume=trading_size/2,
-                 hiding_volume=self.compute_hiding_volume('BULL', trading_size/2, leg_1_dir),action=leg_1_dir)
-                thread3.join()
+                # thread2 = self.optimally_execute_order_on_new_thread('BULL',volume=trading_size/2,
+                #  hiding_volume=self.compute_hiding_volume('BULL', trading_size/2, leg_1_dir),action=leg_1_dir)
+                # # thread2.join()
 
-                thread3 = self.optimally_execute_order_on_new_thread('RITC',volume=trading_size * cointegration_coeff,
-                 hiding_volume=self.compute_hiding_volume('RITC', trading_size * cointegration_coeff, leg_2_dir),action=leg_2_dir)
-                thread3.join()
+                # thread3 = self.optimally_execute_order_on_new_thread('RITC',volume=trading_size * cointegration_coeff,
+                #  hiding_volume=self.compute_hiding_volume('RITC', trading_size * cointegration_coeff, leg_2_dir),action=leg_2_dir)
+                # # thread3.join()
+
+                optimal_arb_executor.open_arbitrage_position(cointegration_coeff, leg_1_dir, leg_2_dir)
 
                 position_status = 'LONG' if spread < 0 else 'SHORT'
                 position_cointegration = cointegration_coeff
+                position_threshold = optimal_threshold
+                position_spread = spread
 
-            # Spread Cross and Unwind
-            if last_spread != None and last_spread * spread < 0:
+            # We unwind once the spread reverts at least an equal amount in the opposite direction
+            if last_spread != None and position_spread * spread < 0 and abs(spread) > position_threshold and position_status != 'CLOSED':
+                print("[STAT ARB] Closing Position...")
                 leg_1_dir = 'BUY' if position_status == 'LONG' else 'SELL'
                 leg_2_dir = 'SELL' if position_status == 'LONG' else 'BUY'
 
+                # Take Profit Needs to be immediate, where as we can afford to build into the position
+                #  and avoid the transaction costs then
+                # order_bear = self.execution_manager.create_order('BEAR', 'MARKET', leg_1_dir, trading_size/2)
+                # order_bull = self.execution_manager.create_order('BULL', 'MARKET', leg_1_dir, trading_size/2)
+                # order_ritc = self.execution_manager.create_order('RITC', 'MARKET', leg_2_dir, trading_size * position_cointegration)
+                # self.execution_manager.execute_orders([order_bear,order_bull,order_ritc], 'ARBITRAGE')
+                
                 # We execute on new threads to ensure simulataneous position entry
                 # Don't procede until all positions have been executed (.join())
-                thread1 = self.optimally_execute_order_on_new_thread('BEAR',volume=trading_size/2,
-                 hiding_volume=self.compute_hiding_volume('BEAR', trading_size/2, leg_1_dir),action=leg_1_dir)
-                thread1.join()
+                # thread1 = self.optimally_execute_order_on_new_thread('BEAR',volume=trading_size/2,
+                #  hiding_volume=self.compute_hiding_volume('BEAR', trading_size/2, leg_1_dir),action=leg_1_dir)
+                # # thread1.join()
 
-                thread2 = self.optimally_execute_order_on_new_thread('BULL',volume=trading_size/2,
-                 hiding_volume=self.compute_hiding_volume('BULL', trading_size/2, leg_1_dir),action=leg_1_dir)
-                thread2.join()
+                # thread2 = self.optimally_execute_order_on_new_thread('BULL',volume=trading_size/2,
+                #  hiding_volume=self.compute_hiding_volume('BULL', trading_size/2, leg_1_dir),action=leg_1_dir)
+                # # thread2.join()
 
-                thread3 = self.optimally_execute_order_on_new_thread('RITC',volume=trading_size * cointegration_coeff,
-                 hiding_volume=self.compute_hiding_volume('RITC', trading_size * position_cointegration, leg_2_dir),action=leg_2_dir)
-                thread3.join()
+                # thread3 = self.optimally_execute_order_on_new_thread('RITC',volume=trading_size * position_cointegration,
+                #  hiding_volume=self.compute_hiding_volume('RITC', trading_size * position_cointegration, leg_2_dir),action=leg_2_dir)
+                # # thread3.join()
+
+                optimal_arb_executor.close_arbitrage_position()
 
                 position_status = 'CLOSED'
                 position_cointegration = 0
+                position_threshold = 0
 
             last_spread = spread
 
@@ -287,11 +292,11 @@ class TradingManager():
         This model calibration is specific to the 2020 RITC competition.
         :returns optimal_threshold: at which the spread should be traded back to equilibrium
         """
-        USD_close = self.securities['USD'].get_ohlc_history(freq="100ms")['c']
+        USD_close = self.securities['USD'].get_midprice_history(freq="500ms")
         historical_spread, avg_slippage = self.construct_historical_spread(['BEAR','BULL'], ['RITC'], USD_close)
         probabilities = self.get_threshold_probaility_curve(historical_spread, avg_slippage)
-        optimal_threshold = self.get_optimal_threshold(probabilities)
-
+        optimal_threshold = max(self.get_optimal_threshold(probabilities), avg_slippage * 1.1) # We must cross spread twice, but we can wait for it to swing to the other extreme and double the threshold in profit
+        print("[STAT ARB] Calibrated Model to Optimal Threshold: %s with Slippage: %s " % (optimal_threshold, avg_slippage))
         return optimal_threshold
 
     def construct_historical_spread(self, leg_1, leg_2, cointegration_coeff):
@@ -310,17 +315,17 @@ class TradingManager():
         slippages = []
 
         for ticker in leg_1:
-            leg_1_closes.append(self.securities[ticker].get_ohlc_history(freq="100ms")['c'])
+            leg_1_closes.append(self.securities[ticker].get_midprice_history(freq="500ms"))
             slippages.append(self.securities[ticker].get_average_slippage())
 
         for ticker in leg_2:
-            leg_2_closes.append(self.securities[ticker].get_ohlc_history(freq="100ms")['c'])
+            leg_2_closes.append(self.securities[ticker].get_midprice_history(freq="500ms"))
             slippages.append(self.securities[ticker].get_average_slippage())
         
-        leg_1 = pd.concat(leg_1_closes, axis=1).sum(axis=1)
-        leg_2 = pd.concat(leg_2_closes, axis=1).sum(axis=1) * cointegration_coeff
-        spread = (leg_2-leg_1).interpolate().dropna()
-
+        leg_1 = pd.concat(leg_1_closes, axis=1).dropna().sum(axis=1)
+        leg_2 = pd.concat(leg_2_closes, axis=1).dropna().sum(axis=1) * cointegration_coeff
+        spread = (leg_2-leg_1).dropna()
+        # print(leg_1_closes[0][10:20] + leg_1_closes[1][10:20] - leg_2_closes[0][10:20])
         return spread, sum(slippages)
 
     def get_spread(self, leg_1, leg_2, cointegration_coeff):
@@ -360,39 +365,54 @@ class TradingManager():
         """
         mean = historical_spread.mean()
         std = historical_spread.std()
-
-        centred_spread = historical_spread - mean
+        # print("[STAT ARB] Historical Mean: %s Std: %s Slippage: %s" % (mean,std, slippage))
+        centred_spread = historical_spread - 0 # This is deliberate, they should be equal in equilibrium
         abs_spread = centred_spread.abs()
 
-        thresholds = np.arange(start=0, stop=std*3, step=slippage)
+        thresholds = np.arange(start=0, stop=std*10, step=slippage/10)
 
         n_samples = abs_spread.shape[0]
 
         threshold_probabilty_curve = []
 
         for threshold in thresholds:
-            probability_of_exceeding_threshold = (abs_spread > threshold).count() / n_samples
+            probability_of_exceeding_threshold = (abs_spread > threshold).sum() / n_samples
             threshold_probabilty_curve.append(probability_of_exceeding_threshold)
-
-        threshold_probabilty_curve = pd.Series(threshold_probabilty_curve)
         
+        threshold_probabilty_curve = pd.Series(threshold_probabilty_curve)
+        threshold_probabilty_curve = threshold_probabilty_curve[threshold_probabilty_curve > 0]
+        thresholds = thresholds[0:threshold_probabilty_curve.shape[0]]
+        
+        threshold_probabilty_curve_decreasing = threshold_probabilty_curve.copy()
         # Makes curve stricly decreasing
-        threshold_probabilty_curve[threshold_probabilty_curve.diff() > 0] = np.nan
-        threshold_probabilty_curve = threshold_probabilty_curve.interpolate()
+        threshold_probabilty_curve_decreasing[threshold_probabilty_curve_decreasing.diff() > 0] = np.nan
+        threshold_probabilty_curve_decreasing = threshold_probabilty_curve_decreasing.interpolate()
         
         # Kernel Smoothing 
         # Parameter alpha = 10**0 seems to be decent
-        clf = KernelRidge(alpha=float(10)**0, kernel='rbf')
-        X, y = thresholds.reshape((-1,1)), threshold_probabilty_curve.values.reshape((-1,))
+        clf = KernelRidge(alpha=float(10)**-2, kernel='rbf')
+        X, y = thresholds.reshape((-1,1)), threshold_probabilty_curve_decreasing.values.reshape((-1,))
         clf.fit(X,y)
         smoothed_probability_curve = pd.DataFrame({'threshold':X.reshape((-1,)),'probability':clf.predict(X)})
+        
+        # threshold_probabilty_curve.plot(label='orig')
+        # threshold_probabilty_curve_decreasing.plot(label='decr')
+        # smoothed_probability_curve['probability'].plot(label='smooth')
+        # plt.legend()
+        # plt.savefig('./printouts/smoothed_curve.png')
+        # plt.clf()
 
         return smoothed_probability_curve
 
     def get_optimal_threshold(self,probabilities):
         profit_curve = 2 * probabilities['threshold']
         profitability = profit_curve * probabilities['probability']
-
+        
+        # profit_curve.plot(label='profit curve')
+        # profitability.plot(label='profitability')
+        # plt.legend()
+        # plt.savefig('./printouts/profitability.png')
+        # plt.clf()
         argmax = profitability.idxmax()
 
         return probabilities['threshold'][argmax]
@@ -521,7 +541,7 @@ class TradingManager():
         order_idx = 0
         
         while transcated_volume < volume:
-            print("[Tender] Pct of Qty Hedged: %.2f" % (transcated_volume/volume))
+            # print("[Tender] Pct of Qty Hedged: %.2f" % (transcated_volume/volume))
             qty = order_qty_seq[order_idx]
             hide_in = order_hiding_volume_seq[order_idx]
             security = self.securities[ticker]
@@ -561,7 +581,7 @@ class TradingManager():
 
                     # Need to force market order if we're not getting any traction
                     if accumulated_volume > hide_in:
-                        print('[TENDER] Hedging order not yet executed, switching to MARKET order')
+                        # print('[TENDER] Hedging order not yet executed, switching to MARKET order')
                         order_type = 'MARKET'
                         price = None
 
