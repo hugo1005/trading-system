@@ -1,5 +1,5 @@
 from execution import TradingTick, ExecutionManager, OptionsExecutionManger
-from securities import Security, Options
+from options import Security, Options
 import numpy as np
 import pandas as pd
 from time import sleep
@@ -19,9 +19,16 @@ class OptionsExecution:
 
     def __init__(self,api,r=0):
         self.options_execution_manager = OptionsExecutionManager(self.api, self.tickers, self.security)
+        self.options = []
 
-        self.securities = Security(self.ticker, self.api)
-        self.options = Options(self.ticker, self.api)
+        self.tickers = pd.DataFrame(data=tickers)
+
+        tickers_reshaped = np.array(self.tickers.values).reshape(-1,)
+
+        for ticker in tickers_reshaped:
+            sec = Options(ticker, self.api, is_currency=False)
+            self.options[ticker] = sec
+
         self.options_execution_manager.start()
         self.call_skew_1 = call_skew_1
         self.call_skew_2 = call_skew_2
@@ -31,33 +38,29 @@ class OptionsExecution:
     def start(self):
         # TODO: Fix time duration its not 295 seconds!
         for t in TradingTick(600, self.api): 
+            self.sigma = self.options.vol_forecast(self)
+
             self.specific_option_misprice(self.tickers)
             self.imp_vol_mp(self.tickers,S, sigma)
             self.termstructure(self.tickers)
             sleep(0.2)
-
-    #we want to define the set of tickers in a data frame to iterate through
-
-    self.tickers = pd.DataFrame(data=tickers)
-
-    self.sigma = self.securities.vol_forecast(self)
 
     "___________________Term Structure Trading Algorithm________________________"
 
     def termstructure(self,tickers):
         for i in range(len(tickers)-1):
 
-            C_1 = self.securities[tickers['ticker_C_1'][i]].get_midprice()
-            P_1 = self.securities[tickers['ticker_P_1'][i]].get_midprice()
-            C_2 = self.securities[tickers['ticker_C_2'][i]].get_midprice()
-            P_2 = self.securities[tickers['ticker_P_2'][i]].get_midprice()
+            C_1 = self.options[tickers['ticker_C_1'][i]].get_midprice()
+            P_1 = self.options[tickers['ticker_P_1'][i]].get_midprice()
+            C_2 = self.options[tickers['ticker_C_2'][i]].get_midprice()
+            P_2 = self.options[tickers['ticker_P_2'][i]].get_midprice()
 
             S, K_C_1, T_C_1, option_C_1 = self.options.option_disect(tickers['ticker_C_1'][i])
             S, K_P_1, T_P_1, option_P_1 = self.options.option_disect(tickers['ticker_P_1'][i])
             S, K_C_2, T_C_2, option_C_2 = self.options.option_disect(tickers['ticker_C_2'][i])
             S, K_P_2, T_P_2, option_P_2 = self.options.option_disect(tickers['ticker_P_2'][i])
 
-            S = self.securities['RTM'].get_midprice()
+            S = self.options['RTM'].get_midprice()
 
             C_1_vol = self.options.nr_imp_vol(S, K_C_1, T_C_1, C_1, r, sigma, option = 'C')
             P_1_vol = self.options.nr_imp_vol(S, K_P_1, T_P_1, P_1, r, sigma, option = 'P')
@@ -128,17 +131,17 @@ class OptionsExecution:
 
         for i in range(len(tickers)-1):
 
-            C_1 = self.securities[tickers['ticker_C_1'][i]].get_midprice()
-            P_1 = self.securities[tickers['ticker_P_1'][i]].get_midprice()
-            C_2 = self.securities[tickers['ticker_C_2'][i]].get_midprice()
-            P_2 = self.securities[tickers['ticker_P_2'][i]].get_midprice()
+            C_1 = self.options[tickers['ticker_C_1'][i]].get_midprice()
+            P_1 = self.options[tickers['ticker_P_1'][i]].get_midprice()
+            C_2 = self.options[tickers['ticker_C_2'][i]].get_midprice()
+            P_2 = self.options[tickers['ticker_P_2'][i]].get_midprice()
 
             S, K_C_1, T_C_1, option_C_1 = self.options.option_disect(tickers['ticker_C_1'][i])
             S, K_P_1, T_P_1, option_P_1 = self.options.option_disect(tickers['ticker_P_1'][i])
             S, K_C_2, T_C_2, option_C_2 = self.options.option_disect(tickers['ticker_C_2'][i])
             S, K_P_2, T_P_2, option_P_2 = self.options.option_disect(tickers['ticker_P_2'][i])
 
-            S = self.securities['RTM'].get_midprice()
+            S = self.options['RTM'].get_midprice()
 
             C_1_vol = self.options.nr_imp_vol(S, K_C_1, T_C_1, C_1, r, sigma, option = 'C')
             P_1_vol = self.options.nr_imp_vol(S, K_P_1, T_P_1, P_1, r, sigma, option = 'P')
@@ -222,8 +225,8 @@ class OptionsExecution:
 
         for i in range(len(tickers)-1):
 
-            C_1 = self.securities[tickers['ticker_C_1'][i]].get_midprice()
-            P_1 = self.securities[tickers['ticker_P_1'][i]].get_midprice()
+            C_1 = self.options[tickers['ticker_C_1'][i]].get_midprice()
+            P_1 = self.options[tickers['ticker_P_1'][i]].get_midprice()
 
             S, K, T, option = self.options.option_disect(tickers['ticker_C_1'][i])
 
@@ -248,8 +251,8 @@ class OptionsExecution:
                 orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,sigma,'P','SELL',100))
                 
 
-            C_2 = self.securities[tickers['ticker_C_2'][i]].get_midprice()
-            P_2 = self.securities[tickers['ticker_P_2'][i]].get_midprice()
+            C_2 = self.options[tickers['ticker_C_2'][i]].get_midprice()
+            P_2 = self.options[tickers['ticker_P_2'][i]].get_midprice()
 
             S, K, T, option = self.options.option_disect(tickers['ticker_C_2'][i])
 
