@@ -84,11 +84,11 @@ class TradingManager():
         # This is working decently, the only issue is the timing componet seems to be always zero
         # which seems to be something to do with a zero bucket duration.... 
         # This will probably work even better when thats fixed
-        # self.tender_watcher = Thread(target=self.watch_for_tenders, name="Tender Watcher")
-        # self.tender_watcher.start()
+        self.tender_watcher = Thread(target=self.watch_for_tenders, name="Tender Watcher")
+        self.tender_watcher.start()
 
-        self.arbitrage_searcher = Thread(target=self.search_for_arbitrage)
-        self.arbitrage_searcher.start()
+        # self.arbitrage_searcher = Thread(target=self.search_for_arbitrage)
+        # self.arbitrage_searcher.start()
 
 
     def __exit__(self, t, value, traceback):

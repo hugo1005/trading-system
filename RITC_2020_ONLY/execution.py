@@ -362,6 +362,33 @@ class ExecutionManager():
         else:
             print('[ExecutionManager] Polling response failed with code: %s' % res.status_code)
 
+class OptionsExecutionManager(ExecutionManager):
+    def __init__(self, api, tickers, securities):
+        super().__init__(api, tickers, securities) #calls all of the arguments from the super class 'Security'
+        self.execution_manager = ExecutionManager(self.api,self.tickers, self.security)
+        self.position_size = 100
+
+    def compute_delta(self,S,K,T,r,sigma,option): #get sigma from api
+        return self.delta(S,K, T, r, sigma,option)
+
+    def delta(self,S, K, T, r, sigma, option):
+
+        d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        
+        if option == 'C':
+            result = si.norm.cdf(d1, 0.0, 1.0)
+        if option == 'P':
+            result = -si.norm.cdf(-d1, 0.0, 1.0)
+            
+        return result
+
+    def delta_hedge(self,S,K, T, r, sigma, option, order_type, order_size):
+        
+        delta = self.compute_delta(S,K, T, r, sigma, option) * order_size
+
+        order = self.execution_manager.create_order('RTM' , 'MARKET',order_type, delta)
+        return order
+
 class OptimalTenderExecutor:
     def __init__(self, execution_manager, ticker, num_large_orders = 3, num_proceeding_small_orders = 10,
      large_to_small_order_size_ratio = 5, vpin_threshold=0.6, risk_aversion=0.005):
@@ -794,7 +821,7 @@ class OptimalArbitrageExecutor:
                 'net_position': 0,
                 'hiding_volume': 0,
                 'net_action': 'BUY',
-                'thread': Thread(target=self.optimally_execute, args=(ticker))
+                'thread': Thread(target=self.optimally_execute, args=(ticker,), name='[%s] Arbitrage' % ticker)
             }
 
             # Compute Trading Params
@@ -817,8 +844,10 @@ class OptimalArbitrageExecutor:
             if qty > 0:
                 order = self.execution_manager.create_order(ticker, 'MARKET', closing_action, qty)
                 orders.append(order)
-
-        self.execution_manager.execute_orders(orders, 'ARBITRAGE')
+                print(order)
+        
+        if len(orders) > 0:
+            self.execution_manager.execute_orders(orders, 'ARBITRAGE')
 
     def open_arbitrage_position(self, cointegration_coeff, leg_1_dir, leg_2_dir):
         """ 
@@ -840,7 +869,7 @@ class OptimalArbitrageExecutor:
 
             track['volume_transacted'] = 0
             track['net_position'] = directional_qty
-            track['hiding_volume'] = self.compute_hiding_volume(ticker, trade_size, action)
+            track['hiding_volume'] = self.compute_hiding_volume(ticker, qty, action)
             track['net_action'] = action
 
             # Compute Trading Params
@@ -858,7 +887,7 @@ class OptimalArbitrageExecutor:
             # Define the sequence of order quantities and their corresponding hiding quantities
             track['order_qty_seq'] = ([track['trading_unit_volume'] * self.large_to_small_order_size_ratio] + ([track['trading_unit_volume']] * self.num_proceeding_small_orders)) * self.num_large_orders
 
-            track['order_hiding_volume_seq'] = ([track['trading_unit_hiding_volume'] * self.large_to_small_order_size_ratio] + (track['trading_unit_hiding_volume'] * self.num_proceeding_small_orders)) * self.num_large_orders
+            track['order_hiding_volume_seq'] = ([track['trading_unit_hiding_volume'] * self.large_to_small_order_size_ratio] + ([track['trading_unit_hiding_volume']] * self.num_proceeding_small_orders)) * self.num_large_orders
             
             track['order_idx'] = 0
 
@@ -889,7 +918,7 @@ class OptimalArbitrageExecutor:
                     break
 
                 if track['volume_transacted'] < track['volume']:
-                    print("[Tender] Pct of Qty Hedged: %.2f" % (self.volume_transacted/self.volume))
+                    print("[Tender] Pct of Qty Hedged: %.2f" % (track['volume_transacted']/track['volume']))
                     qty = track['order_qty_seq'][track['order_idx']]
                     hide_in = track['order_hiding_volume_seq'][track['order_idx']]
                     security = self.execution_manager.securities[ticker]
@@ -1071,12 +1100,14 @@ class OptimalArbitrageExecutor:
 
         # Computes the optimal volume to hide an order of the tender size
         # in order to minimise adverse market impact via private information leakage
+        z_value = st.norm.ppf(1 - self.risk_aversion)
+
         hiding_volume = self.computeOptimalVolume(m=directional_qty,
          phi=leakage_probabililty,
          vB=buy_volume_percentage,
          sigma=std_price_changes,
          volSigma=volume_bucket_size, 
-         S_S=max_spread, K=permanent_price_impact)
+         S_S=max_spread,zLambda=z_value, k=permanent_price_impact)
         
         # How long does an average volume bucket last (in units specified)
         vol_bucket_avg_duration = security.indicators['vol_bucket_avg_duration']

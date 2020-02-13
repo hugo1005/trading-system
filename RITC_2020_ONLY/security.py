@@ -348,3 +348,101 @@ class Security:
     """ ------- Computing Volatility ----- """
     def compute_historical_volatility(self):
         return self.best_bid_ask['midprice'].std()
+
+class Options(Security):
+
+    def __init__(self, ticker, api, poll_delay=0.01, is_currency=False):
+        super().__init__( ticker, api,poll_delay=0.01,is_currency=is_currency) #calls all of the arguments from the super class 'Security'
+
+        self.strike = int(str(self.ticker)[-2:-1])
+        self.maturity = int(str(self.ticker)[3]) / 12
+        self.option_type = str(self.ticker)[4]
+
+    """___________________Vanilla Option Pricer________________________"""
+
+    def vanilla(self, S, K, T, r, sigma,ticker, option = 'C',):
+
+        S = self.get_midprice()
+        K = self.strike
+        T = self.maturity
+        option = self.option_type
+        
+        d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        d2 = (np.log(S / K) + (r - 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        
+        if option == 'C':
+            result = (S * si.norm.cdf(d1, 0.0, 1.0) - K * np.exp(-r * T) * si.norm.cdf(d2, 0.0, 1.0))
+        if option == 'P':
+            result = (K * np.exp(-r * T) * si.norm.cdf(-d2, 0.0, 1.0) - S * si.norm.cdf(-d1, 0.0, 1.0))
+        return result
+
+    def option_disect(self,ticker):
+        S = self.get_midprice()
+        K = self.strike
+        T = self.maturity
+        option = self.option_type
+
+        return S, K, T, option
+
+    """___________________Newton Raphson Implied Volatility Calculator________________________"""
+
+    def nr_imp_vol(self,S, K, T, f, r, sigma,ticker, option = 'C' ):   
+    
+        #S: spot price
+        #K: strike price
+        #T: time to maturity
+        #f: Option value
+        #r: interest rate
+        #sigma: volatility of underlying asset
+        #option: where it is a call or a put option
+
+        S = self.securities['RTM'].get_midprice()
+        K = self.strike
+        T = self.maturity
+        option = self.option_type
+        f = self.securities[ticker].get_midprice()
+        sigma = self.case['RTM'].get_forecast() #not made yet as not sure where forecasted vol will be
+
+        
+        d1 = (np.log(S / K) + (r - 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        d2 = (np.log(S / K) + (r - 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        
+        if option == 'C':
+            fx = S * si.norm.cdf(d1, 0.0, 1.0) - K * np.exp(-r * T) * si.norm.cdf(d2, 0.0, 1.0) - f
+            vega = (1 / np.sqrt(2 * np.pi)) * S * np.sqrt(T) * np.exp(-(si.norm.cdf(d1, 0.0, 1.0) ** 2) * 0.5)
+            
+        if option == 'P':
+            fx = K * np.exp(-r * T) * si.norm.cdf(-d2, 0.0, 1.0) - S * si.norm.cdf(-d1, 0.0, 1.0) - f
+            vega = (1 / np.sqrt(2 * np.pi)) * S * np.sqrt(T) * np.exp(-(si.norm.cdf(d1, 0.0, 1.0) ** 2) * 0.5)
+        
+        tolerance = 0.000001 #limit of margin accepted for newton raphson algorithm
+        x0 = sigma #we take our known 
+        xnew  = x0
+        xold = x0 - 1
+            
+        while abs(xnew - xold) > tolerance:
+        
+            xold = xnew
+            xnew = (xnew - fx - f) / vega
+            
+            return abs(xnew)
+
+    def vol_forecast(self):
+
+        news = requests.get(self.endpoint + '/news', params={'limit':1}, headers=self.headers)
+        if news.ok:
+            body = news.json()[0]['body'] #call the body of the news article
+
+            if body[4] == 'l': #'the latest annualised' - direct figure
+                sigma = int(body[-3:-2])/100
+
+            elif body[4] == 'a': #'the annualized' - expectation of range
+                sigma = (int(body[-26:-25]) + int(body[-32:-31]))/200
+                
+            else: sigma = 0.2
+
+        else:
+            print('[Indicators] Could not reach API! %s' % res.json())
+            sigma = 0.2
+
+        return sigma
