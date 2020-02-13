@@ -376,7 +376,7 @@ class Options(Security):
             result = (K * np.exp(-r * T) * si.norm.cdf(-d2, 0.0, 1.0) - S * si.norm.cdf(-d1, 0.0, 1.0))
         return result
 
-    def option_disect(self,ticker):
+    def option_disect(self):
         S = self.get_midprice()
         K = self.strike
         T = self.maturity
@@ -427,22 +427,4 @@ class Options(Security):
             
             return abs(xnew)
 
-    def vol_forecast(self):
-
-        news = requests.get(self.endpoint + '/news', params={'limit':1}, headers=self.headers)
-        if news.ok:
-            body = news.json()[0]['body'] #call the body of the news article
-
-            if body[4] == 'l': #'the latest annualised' - direct figure
-                sigma = int(body[-3:-2])/100
-
-            elif body[4] == 'a': #'the annualized' - expectation of range
-                sigma = (int(body[-26:-25]) + int(body[-32:-31]))/200
-                
-            else: sigma = 0.2
-
-        else:
-            print('[Indicators] Could not reach API! %s' % res.json())
-            sigma = 0.2
-
-        return sigma
+    

@@ -365,7 +365,6 @@ class ExecutionManager():
 class OptionsExecutionManager(ExecutionManager):
     def __init__(self, api, tickers, securities):
         super().__init__(api, tickers, securities) #calls all of the arguments from the super class 'Security'
-        self.execution_manager = ExecutionManager(self.api,self.tickers, self.security)
         self.position_size = 100
 
     def compute_delta(self,S,K,T,r,sigma,option): #get sigma from api
@@ -376,9 +375,9 @@ class OptionsExecutionManager(ExecutionManager):
         d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
         
         if option == 'C':
-            result = si.norm.cdf(d1, 0.0, 1.0)
+            result = st.norm.cdf(d1, 0.0, 1.0)
         if option == 'P':
-            result = -si.norm.cdf(-d1, 0.0, 1.0)
+            result = -st.norm.cdf(-d1, 0.0, 1.0)
             
         return result
 
@@ -386,8 +385,27 @@ class OptionsExecutionManager(ExecutionManager):
         
         delta = self.compute_delta(S,K, T, r, sigma, option) * order_size
 
-        order = self.execution_manager.create_order('RTM' , 'MARKET',order_type, delta)
+        order = self.create_order('RTM' , 'MARKET',order_type, delta)
         return order
+    
+    def vol_forecast(self):
+        news = requests.get(self.endpoint + '/news', params={'limit':1}, headers=self.headers)
+        if news.ok:
+            body = news.json()[0]['body'] #call the body of the news article
+
+            if body[4] == 'l': #'the latest annualised' - direct figure
+                sigma = int(body[-3:-2])/100
+
+            elif body[4] == 'a': #'the annualized' - expectation of range
+                sigma = (int(body[-26:-25]) + int(body[-32:-31]))/200
+                
+            else: sigma = 0.2
+
+        else:
+            print('[Indicators] Could not reach API! %s' % res.json())
+            sigma = 0.2
+
+        return sigma
 
 class OptimalTenderExecutor:
     def __init__(self, execution_manager, ticker, num_large_orders = 3, num_proceeding_small_orders = 10,
