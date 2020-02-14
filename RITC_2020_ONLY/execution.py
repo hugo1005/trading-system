@@ -84,6 +84,7 @@ class ExecutionManager():
         accept_res = requests.post(self.endpoint + '/tenders/%s' % tender['tender_id'], headers=self.headers)
 
         if accept_res.ok:
+            print('[Tenders] Prev Net Pos %s Previous Gross Pos: %s' % (self.get_net_gross_positions()))
             print('[Tenders] Accepted : price: %s qty: %s action: %s' % (tender['price'],
             tender['quantity'], tender['action']))
             print(accept_res.json())
@@ -244,6 +245,12 @@ class ExecutionManager():
 
     """ Risk Control Logic """
 
+    def get_net_gross_positions(self):
+        current_net_position = sum([self.net_positions[t] for t in self.net_positions])
+        current_gross_position = sum([abs(self.net_positions[t]) for t in self.net_positions])
+
+        return current_net_position, current_gross_position
+
     def can_execute_orders(self, orders):
         """Evaluates whether a set of orders can be made without exceeding risk limits.
         This has the advantage of centralising all risk management.
@@ -259,14 +266,13 @@ class ExecutionManager():
 
         orders_df['directional_qty'] = orders_df['multiplier'] * orders_df['direction'] * orders_df['quantity']
 
-        current_net_position = sum([self.net_positions[t] for t in self.net_positions])
-        current_gross_position = sum([abs(self.net_positions[t]) for t in self.net_positions])
+        current_net_position, current_gross_position = self.get_net_gross_positions()
 
         additional_net_position = orders_df['directional_qty'].sum()
         additional_gross_position = orders_df['directional_qty'].abs().sum()
 
-        is_within_limits =  (self.net_limit > additional_net_position + current_net_position) and \
-            (self.gross_limit > additional_gross_position + current_gross_position)
+        is_within_limits =  (self.net_limit > abs(additional_net_position + current_net_position)) and \
+            (self.gross_limit > abs(additional_gross_position + current_gross_position))
         
         return is_within_limits
 

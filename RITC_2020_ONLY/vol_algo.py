@@ -114,7 +114,7 @@ class OptionsTradingManager:
                     sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_1,T_P_1,r,self.sigma,'P','SELL',100))
 
             
-            #if strike < 100% term structure should be inverted
+            #if strike < 5% term structure should be inverted
             if K_C_1/S < 1:
                 
                 #if normal call term structure
