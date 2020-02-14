@@ -140,7 +140,11 @@ class ExecutionManager():
         :return order_ids: returns a list of executed order ids
         """
         executed_orders = []
+        orders = [order for order in orders if order != None]
         
+        if len(orders) == 0:
+            return []
+
         if self.can_execute_orders(orders):
             # print(["[ExecManager] Executing Orders: %s" % orders])
             # API is rate limited to 5 orders per second  
@@ -187,6 +191,7 @@ class ExecutionManager():
                     sleep(content['wait'] + 0.01)
                     orders.append(order)
                 else:
+                    print(order)
                     print(res.json())
         
         print("[Execution] Executed orders: %s" % [order['order_id'] for order in executed_orders])
@@ -245,6 +250,7 @@ class ExecutionManager():
             :param orders: List of orders
             :return: True or False
         """
+
         orders_df = pd.DataFrame(orders)
         orders_df['direction'] = orders_df['action'].replace(to_replace={'BUY': 1, 'SELL': -1})
         
@@ -259,7 +265,7 @@ class ExecutionManager():
         additional_net_position = orders_df['directional_qty'].sum()
         additional_gross_position = orders_df['directional_qty'].abs().sum()
 
-        is_within_limits =  (self.net_limit > additional_net_position + current_net_position) or \
+        is_within_limits =  (self.net_limit > additional_net_position + current_net_position) and \
             (self.gross_limit > additional_gross_position + current_gross_position)
         
         return is_within_limits
@@ -280,8 +286,9 @@ class ExecutionManager():
 
         if order_id in self.market_making_orders:
             self.net_market_making_positions[ticker] += qty_directional
-
-        self.net_positions[ticker] += qty_directional
+        
+        if ticker in self.net_positions:
+            self.net_positions[ticker] += qty_directional
     
     """ Hedging Logic """
     def hedge_position(self, source):
@@ -366,6 +373,19 @@ class OptionsExecutionManager(ExecutionManager):
     def __init__(self, api, tickers, securities):
         super().__init__(api, tickers, securities) #calls all of the arguments from the super class 'Security'
         self.position_size = 100
+        
+        # Override for options specific limits
+        """" Risk Limits """
+        res = requests.get(self.endpoint + '/limits', headers=self.headers)
+
+        if res.ok:
+            # For some reason it returns a list rather than single dict
+            limits = res.json()[1] 
+            self.gross_limit = limits['gross_limit']
+            self.net_limit = limits['net_limit']
+            print("[OptionsExecManager] Options Position Net Limits: %s" % self.net_limit)
+        else:
+            print('[Execution Manager] Error could not obtain position limits from API!')
 
     def compute_delta(self,S,K,T,r,sigma,option): #get sigma from api
         return self.delta(S,K, T, r, sigma,option)
@@ -385,7 +405,9 @@ class OptionsExecutionManager(ExecutionManager):
         
         delta = self.compute_delta(S,K, T, r, sigma, option) * order_size
 
-        order = self.create_order('RTM' , 'MARKET',order_type, delta)
+        delta = max(round(delta, 0), 0)
+
+        order = self.create_order('RTM' , 'MARKET',order_type, delta) if delta > 0 else None
         return order
     
     def vol_forecast(self):
@@ -406,6 +428,42 @@ class OptionsExecutionManager(ExecutionManager):
             sigma = 0.2
 
         return sigma
+
+    """___________________Newton Raphson Implied Volatility Calculator________________________"""
+
+    def nr_imp_vol(self,S, K, T, f, r, sigma, option = 'C' ):   
+    
+        #S: spot price
+        #K: strike price
+        #T: time to maturity
+        #f: Option value
+        #r: interest rate
+        #sigma: volatility of underlying asset
+        #option: where it is a call or a put option
+        
+        d1 = (np.log(S / K) + (r - 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        d2 = (np.log(S / K) + (r - 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        
+        if option == 'C':
+            fx = S * st.norm.cdf(d1, 0.0, 1.0) - K * np.exp(-r * T) * st.norm.cdf(d2, 0.0, 1.0) - f
+            vega = (1 / np.sqrt(2 * np.pi)) * S * np.sqrt(T) * np.exp(-(st.norm.cdf(d1, 0.0, 1.0) ** 2) * 0.5)
+            
+        if option == 'P':
+            fx = K * np.exp(-r * T) * st.norm.cdf(-d2, 0.0, 1.0) - S * st.norm.cdf(-d1, 0.0, 1.0) - f
+            vega = (1 / np.sqrt(2 * np.pi)) * S * np.sqrt(T) * np.exp(-(st.norm.cdf(d1, 0.0, 1.0) ** 2) * 0.5)
+        
+        tolerance = 0.000001 #limit of margin accepted for newton raphson algorithm
+        x0 = sigma #we take our known 
+        xnew  = x0
+        xold = x0 - 1
+            
+        while abs(xnew - xold) > tolerance:
+        
+            xold = xnew
+            xnew = (xnew - fx - f) / vega
+            
+            return abs(xnew)
+
 
 class OptimalTenderExecutor:
     def __init__(self, execution_manager, ticker, num_large_orders = 3, num_proceeding_small_orders = 10,
