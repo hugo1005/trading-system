@@ -413,9 +413,9 @@ class OptionsExecutionManager(ExecutionManager):
         delta = self.compute_delta(S,K, T, r, sigma, option) * order_size
 
         delta = abs(delta) # as the delta of puts is negative but that is dealt with with order_type in create_order
-        delta = max(round(delta, 0), 0)
+        delta = max(round(delta, 0), 1)
 
-        delta_order_size = max(round(delta/S,0),0)
+        delta_order_size = max(round(delta/S,0),1)
 
         order = self.create_order('RTM' , 'MARKET',order_type, delta_order_size) if delta > 0 else None
         return order
@@ -478,8 +478,8 @@ class OptionsExecutionManager(ExecutionManager):
 
 
 class OptimalTenderExecutor:
-    def __init__(self, execution_manager, ticker, num_large_orders = 3, num_proceeding_small_orders = 10,
-     large_to_small_order_size_ratio = 5, vpin_threshold=0.6, risk_aversion=0.005):
+    def __init__(self, execution_manager, ticker, num_large_orders = 3, num_proceeding_small_orders = 6,
+     large_to_small_order_size_ratio = 10, vpin_threshold=0.6, risk_aversion=0.005):
         self.execution_manager = execution_manager
         self.api = self.execution_manager.api
         self.ticker = ticker
@@ -587,7 +587,7 @@ class OptimalTenderExecutor:
             if not self.can_execute:
                 break
 
-            if self.volume_transacted < self.volume:
+            if self.volume_transacted < self.volume  and len(self.order_qty_seq) > self.order_idx:
                 print("[Tender] Pct of Qty Hedged: %.2f" % (self.volume_transacted/self.volume))
                 qty = self.order_qty_seq[self.order_idx]
                 hide_in = self.order_hiding_volume_seq[self.order_idx]
@@ -691,10 +691,17 @@ class OptimalTenderExecutor:
         # at around 0.10 cents
         permanent_price_impact = 0.00001
 
+        z_value = st.norm.ppf(1 - self.risk_aversion)
         # Computes the optimal volume to hide an order of the tender size
         # in order to minimise adverse market impact via private information leakage
-        hiding_volume = self.computeOptimalVolume(directional_qty,leakage_probabililty,buy_volume_percentage,std_price_changes,volume_bucket_size,max_spread,permanent_price_impact)
-        
+        # hiding_volume = self.computeOptimalVolume(directional_qty,leakage_probabililty,buy_volume_percentage,std_price_changes,volume_bucket_size,max_spread,permanent_price_impact)
+        hiding_volume = self.computeOptimalVolume(m=directional_qty,
+         phi=leakage_probabililty,
+         vB=buy_volume_percentage,
+         sigma=std_price_changes,
+         volSigma=volume_bucket_size, 
+         S_S=max_spread,zLambda=z_value, k=permanent_price_impact)
+
         # How long does an average volume bucket last (in units specified)
         vol_bucket_avg_duration = security.indicators['vol_bucket_avg_duration']
         hiding_buckets = hiding_volume / volume_bucket_size

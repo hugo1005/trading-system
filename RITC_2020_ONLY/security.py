@@ -383,3 +383,4 @@ class Options(Security):
         option = self.option_type
 
         return S, K, T, option
+    
