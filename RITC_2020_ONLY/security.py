@@ -188,6 +188,15 @@ class Security:
     def get_average_slippage(self):
         return (self.best_bid_ask['best_ask'] - self.best_bid_ask['best_bid']).mean()
     
+    """ ---- VWAP ---- """
+    def get_vwap(self, freq='1s', window=12):
+        p = self.tas_history['price'].resample(freq).mean().iloc[-1*window:]
+        q = self.tas_history['quantity'].resample(freq).sum().iloc[-1*window:]
+
+        vwap = (p * q).sum() / q.sum()
+
+        return vwap
+
     """ ------- Computing VPIN -------- """
     
     def standardise_order_qty(self, df, target):
