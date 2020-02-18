@@ -47,19 +47,23 @@ class OptionsTradingManager:
         # TODO: Fix time duration its not 295 seconds!
         sleep(5)
 
+        is_second_run = False
+
         for t in TradingTick(600, self.api): 
-            if t >= 270:
-                self.tickers = {'ticker_C_2':self.tickers['ticker_C_2'], 'ticker_P_2':self.tickers['ticker_P_2']}
-
             self.sigma = self.options_execution_manager.vol_forecast()
-
-            if t < 270:
+            
+            if t >= 270:
+                is_second_run = True
+            
+            if is_second_run:
+                self.tickers = {'ticker_C_2':self.tickers['ticker_C_2'], 'ticker_P_2':self.tickers['ticker_P_2']}
+                self.specific_option_misprice_2(self.tickers)
+                self.imp_vol_mp_2(self.tickers)
+            else:
                 self.specific_option_misprice_1(self.tickers)
                 self.imp_vol_mp_1(self.tickers)
                 self.termstructure(self.tickers)
-            else:
-                self.specific_option_misprice_2(self.tickers)
-                self.imp_vol_mp_2(self.tickers)
+
             sleep(0.2)
 
     def __exit__(self, t, value, traceback):
