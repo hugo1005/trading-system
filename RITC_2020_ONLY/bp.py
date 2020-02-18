@@ -43,6 +43,16 @@ LIMIT_RCA = 20
 CONTRACT_SIZE_CL = 1000
 CONTRACT_SIZE_RCA = 1000
 
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
 class BPTradingManager():
     def __init__(self, tickers, poll_delay=0.005):
         """" 
@@ -121,32 +131,32 @@ class BPTradingManager():
                 profit_per_rig =  DAYS_PER_WEEK * (production_runs_per_day * (crude_revenue - rca_costs) - RIG_COST_PER_DAY) + rebate_value
 
                 if profit_per_rig > 0:
-                    print("[PROD MONITOR] Profitable to Produce: $%.2f per rig" % profit_per_rig)
+                    print("\033[92m [PROD MONITOR] Profitable to Produce: $%.2f per rig" % profit_per_rig)
                 else:
-                    print("[PROD MONITOR] Don't Produce this week: $%.2f per rig" % profit_per_rig)
+                    print("\033[93m [PROD MONITOR] Don't Produce this week: $%.2f per rig" % profit_per_rig)
 
             if t % DAY_TICKS == 0:
                 if profit_per_rig > 0:
-                    print("[PROD MONITOR] Hire Rig (tick: %s)" % t)
+                    print("\033[92m [PROD MONITOR] Hire Rig (tick: %s)" % t)
 
             if t % PRODUCTION_TICKS == 0:
                 RCA_best_bid, _ = self.securities['RCA'].get_best_bid_ask()
 
                 if profit_per_rig > 0:
-                    print("[PROD MONITOR] Extract Oil (tick: %s)" % t)
+                    print("\033[94m [PROD MONITOR] Extract Oil (tick: %s)" % t)
                     
                     CL_best_bid, _ = self.securities['CL'].get_best_bid_ask()
                     CL_vwap = self.securities['CL'].get_vwap()
 
                     if FAIR_PRICE_CL > CL_best_bid:
-                        print("[PROD MONITOR] Stockpile Oil, its undervalued (tick: %s, price: %.2f)" % (t, CL_best_bid))
+                        print("\033[94m [PROD MONITOR] Stockpile Oil, its undervalued (tick: %s, price: %.2f)" % (t, CL_best_bid))
                     elif CL_vwap > CL_best_bid:
-                        print("[PROD MONITOR] Stockpile Oil, VWAP is higher (VWAP: %.2f, price: %.2f)" % (CL_vwap, CL_best_bid))
+                        print("\033[94m [PROD MONITOR] Stockpile Oil, VWAP is higher (VWAP: %.2f, price: %.2f)" % (CL_vwap, CL_best_bid))
                     else:
-                        print("[PROD MONITOR] Sell Oil (VWAP: %.2f, price: %.2f)" % (CL_vwap, CL_best_bid))
+                        print("\033[93m [PROD MONITOR] Sell Oil (VWAP: %.2f, price: %.2f)" % (CL_vwap, CL_best_bid))
 
                 if FAIR_PRICE_RCA > RCA_best_bid:
-                    print("[PROD MONITOR] Buy RCA, its undervalued (tick: %s, price: %.2f)" % (t, RCA_best_bid))
+                    print("\033[93m [PROD MONITOR] Buy RCA, its undervalued (tick: %s, price: %.2f)" % (t, RCA_best_bid))
 
                 
 
