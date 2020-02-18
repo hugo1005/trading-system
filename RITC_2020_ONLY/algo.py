@@ -19,6 +19,7 @@ import math
 
 import os
 import warnings
+import signal
 warnings.filterwarnings('ignore')
 
 clear = lambda: os.system('cls')
@@ -95,8 +96,9 @@ class TradingManager():
         self.enable_market_maker = False
         self.accept_tender_orders = False
         self.enable_arbitrage = False
+
         print("-------------- Trading Period Finished! -----------------")
-    
+
     """ Polling Securities """
     def poll_securities(self):
         print("[PollingSecurities] Started...")
@@ -857,9 +859,8 @@ def install_thread_excepthook():
 
 #TODO: Get threads print statements working
 def main():
-    print('reached')
+
     with TradingManager(['RITC','BEAR','BULL','USD']) as tm:
-        
         for t in TradingTick(295,  API(API_CONFIG, DB_PATH, SQL_CONFIG, use_websocket=False)):
             pass
 

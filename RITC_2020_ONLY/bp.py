@@ -25,7 +25,7 @@ API_CONFIG = './configs/api_config.json'
 SQL_CONFIG = './configs/sql_config.txt'
 DB_PATH = './datasets/hftoolkit_sqlite.db'
 
-CASE_MAX_TICKS = 600
+CASE_MAX_TICKS = 960
 DAY_TICKS = 24
 DAYS_PER_WEEK = 5
 
@@ -85,7 +85,7 @@ class BPTradingManager():
         self.poll_securities.start()
         self.execution_manager.start()
 
-        sleep(0.3) # Lets securities start polling
+        sleep(15) # Lets securities start polling
 
         """ Lets fix securities first!"""
         self.crude_production_mointor = Thread(target=self.monitor_production, name="Tender Watcher")
@@ -100,7 +100,7 @@ class BPTradingManager():
     """ Polling Securities """
     def poll_securities(self):
         print("[PollingSecurities] Started...")
-        for t in TradingTick(295, self.api):
+        for t in TradingTick(CASE_MAX_TICKS, self.api):
             for ticker in self.tickers:
                 self.securities[ticker].poll()
             

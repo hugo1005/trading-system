@@ -325,7 +325,20 @@ class ExecutionManager():
                     self.execute_orders([order], 'MARKET_MAKER')
                     print('[Hedging] Hedging Currency Expsoure')
  
-    
+    def close_all_positions(self):
+        orders = []
+
+        for sec in self.securities:
+            sec.position 
+            net_exposure = self.securities[sec].position
+            print('[Hedging] Hedging Expsoure: $%s' % net_exposure)
+            action = 'BUY' if net_exposure < 0 else 'SELL'
+
+            if net_exposure != 0:
+                order = self.create_order(sec, 'MARKET', action, abs(net_exposure))
+                orders.append(order)
+
+        self.execute_orders(orders, 'MARKET_MAKER')
    
     """ Order Fill Monitoring """
 
