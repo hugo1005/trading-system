@@ -147,7 +147,7 @@ class ExecutionManager():
             return []
 
         if self.can_execute_orders(orders):
-            # print(["[ExecManager] Executing Orders: %s" % orders])
+            print(["[ExecManager] Executing Orders: %s" % orders])
             # API is rate limited to 5 orders per second  
             while len(orders) > 0:
                 order = orders.pop()
@@ -195,7 +195,7 @@ class ExecutionManager():
                     print(order)
                     print(res.json())
         
-        print("[Execution] Executed orders: %s" % [order['order_id'] for order in executed_orders])
+        # print("[Execution] Executed orders: %s" % [order['order_id'] for order in executed_orders])
         return [order['order_id'] for order in executed_orders]
     
     def pull_orders(self, order_ids):
@@ -323,7 +323,7 @@ class ExecutionManager():
             if net_currency_exposure != 0:
                     order = self.create_order('USD', 'MARKET', action, abs(net_currency_exposure))
                     self.execute_orders([order], 'MARKET_MAKER')
-                    # print('[Hedging] Hedging Currency Expsoure')
+                    print('[Hedging] Hedging Currency Expsoure')
  
     
    
@@ -409,11 +409,15 @@ class OptionsExecutionManager(ExecutionManager):
 
     def delta_hedge(self,S,K, T, r, sigma, option, order_type, order_size):
         
+        #option multiplier is 100x
         delta = self.compute_delta(S,K, T, r, sigma, option) * order_size
 
+        delta = abs(delta) # as the delta of puts is negative but that is dealt with with order_type in create_order
         delta = max(round(delta, 0), 0)
 
-        order = self.create_order('RTM' , 'MARKET',order_type, delta) if delta > 0 else None
+        delta_order_size = max(round(delta/S,0),0)
+
+        order = self.create_order('RTM' , 'MARKET',order_type, delta_order_size) if delta > 0 else None
         return order
     
     def vol_forecast(self):
@@ -422,16 +426,18 @@ class OptionsExecutionManager(ExecutionManager):
             body = news.json()[0]['body'] #call the body of the news article
 
             if body[4] == 'l': #'the latest annualised' - direct figure
-                sigma = int(body[-3:-2])/100
+                sigma = int(body[-3:-1])/100
 
             elif body[4] == 'a': #'the annualized' - expectation of range
-                sigma = (int(body[-26:-25]) + int(body[-32:-31]))/200
+                sigma = (int(body[-26:-24]) + int(body[-32:-30]))/200
                 
             else: sigma = 0.2
 
         else:
             print('[Indicators] Could not reach API! %s' % res.json())
             sigma = 0.2
+
+        print("Vol Forecast is",sigma)
 
         return sigma
 
@@ -878,8 +884,8 @@ class OptimalTenderExecutor:
     """ ------- Deprecated -------- """
     
 class OptimalArbitrageExecutor:
-    def __init__(self, execution_manager, tickers, trading_size, num_large_orders = 3, num_proceeding_small_orders = 10,
-     large_to_small_order_size_ratio = 5, vpin_threshold=0.6, risk_aversion=0.005):
+    def __init__(self, execution_manager, tickers, trading_size, num_large_orders = 3, num_proceeding_small_orders = 4,
+     large_to_small_order_size_ratio = 20, vpin_threshold=0.6, risk_aversion=0.005):
         self.execution_manager = execution_manager
         self.api = self.execution_manager.api
 
@@ -940,15 +946,19 @@ class OptimalArbitrageExecutor:
         ritc = self.tracking['RITC']
 
         #  Todo close out any net positions with market orders
-        self.close_arbitrage_position()
-
+        # self.close_arbitrage_position()
+        print("[STAT ARB] Opening Position: BEAR/BULL: %s RITC: %s Coeff: %.3f" % (leg_1_dir, leg_2_dir, cointegration_coeff))
+        
         for ticker in self.tracking:
+
+            track = self.tracking[ticker] 
+            before = (track['volume_transacted'],track['net_position'],track['hiding_volume'],track['net_action'])
+            print("[STAT ARB] (Old) volume_transacted: %s net_position %s hiding_volume: %s net_action: %s " % before)
+            
             qty = self.trading_size if ticker == 'RITC' else self.trading_size / 2
             action = leg_2_dir if ticker == 'RITC' else leg_1_dir
             directional_qty = qty * -1 if action == 'SELL' else qty
             
-            track = self.tracking[ticker] 
-
             track['volume_transacted'] = 0
             track['net_position'] = directional_qty
             track['hiding_volume'] = self.compute_hiding_volume(ticker, qty, action)
@@ -956,6 +966,12 @@ class OptimalArbitrageExecutor:
 
             # Compute Trading Params
             self.compute_execution_params(ticker)
+
+            after = (track['volume_transacted'],track['net_position'],track['hiding_volume'],track['net_action'])
+            print("[STAT ARB] (New) volume_transacted: %s net_position %s hiding_volume: %s net_action: %s " % after)
+            print("----------------------------------------------------------------------")
+
+        print('\n')
     
     def compute_execution_params(self, ticker):
             # Compute the size of a small volume unit
@@ -999,8 +1015,8 @@ class OptimalArbitrageExecutor:
                 if not self.can_execute:
                     break
 
-                if track['volume_transacted'] < track['volume']:
-                    print("[Tender] Pct of Qty Hedged: %.2f" % (track['volume_transacted']/track['volume']))
+                if track['volume_transacted'] < track['volume'] and len(track['order_qty_seq']) > track['order_idx']:
+                    # print("[Tender] Pct of Qty Hedged: %.2f" % (track['volume_transacted']/track['volume']))
                     qty = track['order_qty_seq'][track['order_idx']]
                     hide_in = track['order_hiding_volume_seq'][track['order_idx']]
                     security = self.execution_manager.securities[ticker]
@@ -1190,10 +1206,22 @@ class OptimalArbitrageExecutor:
          sigma=std_price_changes,
          volSigma=volume_bucket_size, 
          S_S=max_spread,zLambda=z_value, k=permanent_price_impact)
+
+        # Works around a glitch I found
+        hiding_volume = max(hiding_volume, volume)
+        
+        inputs = {"m":directional_qty,
+        "phi":leakage_probabililty,
+        "vB":buy_volume_percentage,
+        "sigma":std_price_changes,
+        "volSigma":volume_bucket_size, 
+        "S_S":max_spread,"zLambda":z_value, "k":permanent_price_impact}
         
         # How long does an average volume bucket last (in units specified)
         vol_bucket_avg_duration = security.indicators['vol_bucket_avg_duration']
         hiding_buckets = hiding_volume / volume_bucket_size
+        print('[HIDING] Params: %s' % inputs)
+        print('[HIDING] Hiding Volume: %s Original QTY: %s' % (hiding_volume, directional_qty))
 
         return hiding_volume
 

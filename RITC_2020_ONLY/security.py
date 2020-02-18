@@ -20,7 +20,7 @@ class Security:
         self.is_currency = is_currency
         self.init_time = time()
 
-        self.indicators = {}
+        self.indicators = {'VPIN':0.5}
         self.book_history = pd.DataFrame(columns=['type','price','quantity'])
         self.tas_history = pd.DataFrame(columns=['id','type','price','quantity'])
         self.best_bid_ask = pd.DataFrame(columns=['best_bid','best_ask', 'midprice'])
@@ -363,7 +363,7 @@ class Options(Security):
     def __init__(self, ticker, api, poll_delay=0.01, is_currency=False):
         super().__init__( ticker, api,poll_delay=0.01,is_currency=is_currency) #calls all of the arguments from the super class 'Security'
 
-        self.strike = int(str(self.ticker)[-2:-1])
+        self.strike = int(str(self.ticker)[5:7])
         self.maturity = int(str(self.ticker)[3]) / 12
         self.option_type = str(self.ticker)[4]
 
@@ -392,4 +392,3 @@ class Options(Security):
         option = self.option_type
 
         return S, K, T, option
-    

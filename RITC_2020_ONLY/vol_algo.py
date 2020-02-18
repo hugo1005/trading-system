@@ -43,29 +43,55 @@ class OptionsTradingManager:
 
         self.options_execution_manager.start()
 
+    
     def __enter__(self):
         # TODO: Fix time duration its not 295 seconds!
         sleep(5)
 
         is_second_run = False
 
-        for t in TradingTick(600, self.api): 
+        for t in TradingTick(600, self.api):
+            print('time is',t)
             self.sigma = self.options_execution_manager.vol_forecast()
-            
-            if t >= 270:
-                is_second_run = True
-            
+
+            if t >= 290: is_second_run = True
+
             if is_second_run:
                 self.tickers = {'ticker_C_2':self.tickers['ticker_C_2'], 'ticker_P_2':self.tickers['ticker_P_2']}
                 self.specific_option_misprice_2(self.tickers)
                 self.imp_vol_mp_2(self.tickers)
+
             else:
                 self.specific_option_misprice_1(self.tickers)
                 self.imp_vol_mp_1(self.tickers)
                 self.termstructure(self.tickers)
 
-            sleep(0.2)
+            sleep(4)
+    '''
+    def __enter__(self):
+        # TODO: Fix time duration its not 295 seconds!
+        sleep(5)
 
+        a = [0,290]
+
+        for a in a:
+
+            for t in TradingTick(300, self.api):
+                print('time is',t+a)
+                self.sigma = self.options_execution_manager.vol_forecast()
+
+                if t+a >= 290:
+                    self.tickers = {'ticker_C_2':self.tickers['ticker_C_2'], 'ticker_P_2':self.tickers['ticker_P_2']}
+                    self.specific_option_misprice_2(self.tickers)
+                    self.imp_vol_mp_2(self.tickers)
+
+                else:
+                    self.specific_option_misprice_1(self.tickers)
+                    self.imp_vol_mp_1(self.tickers)
+                    self.termstructure(self.tickers)
+
+                sleep(4)
+    '''
     def __exit__(self, t, value, traceback):
         print("-------------- Trading Period Finished! -----------------")
 
@@ -101,21 +127,21 @@ class OptionsTradingManager:
                 if C_2_vol < C_1_vol:
                     print("At Strike",K_C_1,"Buy 2M and Sell 1M Call")
 
-                    orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET','BUY', 100))
-                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_2,T_C_2,r,self.sigma,'C','SELL',100))
+                    orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET','BUY', 1))
+                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_2,T_C_2,r,self.sigma,'C','SELL',1))
 
-                    orders.append(self.options_execution_manager.create_order(tickers['ticker_C_1'][i] , 'MARKET','SELL', 100))
-                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_1,T_C_1,r,self.sigma,'C','BUY',100))
+                    orders.append(self.options_execution_manager.create_order(tickers['ticker_C_1'][i] , 'MARKET','SELL', 1))
+                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_1,T_C_1,r,self.sigma,'C','BUY',1))
                 
                 #if inverted put term structure
                 if P_2_vol < P_1_vol:
                     print("At Strike",K_C_1,"Buy 2M and Sell 1M Put")
 
-                    orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET','BUY', 100))
-                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_2,T_P_2,r,self.sigma,'P','BUY',100))
+                    orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET','BUY', 1))
+                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_2,T_P_2,r,self.sigma,'P','BUY',1))
 
-                    orders.append(self.options_execution_manager.create_order(tickers['ticker_P_1'][i] , 'MARKET','SELL', 100))
-                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_1,T_P_1,r,self.sigma,'P','SELL',100))
+                    orders.append(self.options_execution_manager.create_order(tickers['ticker_P_1'][i] , 'MARKET','SELL', 1))
+                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_1,T_P_1,r,self.sigma,'P','SELL',1))
 
             
             #if strike < 5% term structure should be inverted
@@ -125,21 +151,21 @@ class OptionsTradingManager:
                 if C_2_vol >= C_1_vol:
                     print("At Strike",K_C_1,"Buy 1M and Sell 2M Call")
 
-                    orders.append(self.options_execution_manager.create_order(tickers['ticker_C_1'][i] , 'MARKET','BUY', 100))
-                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_1,T_C_1,r,self.sigma,'C','SELL',100))
+                    orders.append(self.options_execution_manager.create_order(tickers['ticker_C_1'][i] , 'MARKET','BUY', 1))
+                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_1,T_C_1,r,self.sigma,'C','SELL',1))
 
-                    orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET','SELL', 100))
-                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_2,T_C_2,r,self.sigma,'C','BUY',100))
+                    orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET','SELL', 1))
+                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_2,T_C_2,r,self.sigma,'C','BUY',1))
                 
                 #if normal put term structure
                 if P_2_vol >= P_1_vol:
                     print("At Strike",K_C_1,"Buy 1M and Sell 2M Put")
 
-                    orders.append(self.options_execution_manager.create_order(tickers['ticker_P_1'][i] , 'MARKET','BUY', 100))
-                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_1,T_P_1,r,self.sigma,'P','BUY',100))
+                    orders.append(self.options_execution_manager.create_order(tickers['ticker_P_1'][i] , 'MARKET','BUY', 1))
+                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_1,T_P_1,r,self.sigma,'P','BUY',1))
 
-                    orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET','SELL', 100))
-                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_2,T_P_2,r,self.sigma,'P','SELL',100))
+                    orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET','SELL', 1))
+                    sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_2,T_P_2,r,self.sigma,'P','SELL',1))
 
         oids = self.options_execution_manager.execute_orders(orders, 'OPTION')
         self.securities_execution_manager.execute_orders(sec_orders, 'OPTION')
@@ -182,45 +208,45 @@ class OptionsTradingManager:
 
             if C_1_vol < self.sigma:
                 print("At Strike",K_C_1,"Buy 1M Call") #Buy as the implied vol is priced below what is forecast
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_1'][i] , 'MARKET','BUY', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_1,T_C_1,r,self.sigma,'C','SELL',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_1'][i] , 'MARKET','BUY', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_1,T_C_1,r,self.sigma,'C','SELL',1))
             elif C_1_vol > self.sigma:
                 print("At Strike",K_C_1,"Sell 1M Call") #Sell as the implied vol is priced above what is forecast
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_1'][i] , 'MARKET','SELL', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_1,T_C_1,r,self.sigma,'C','BUY',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_1'][i] , 'MARKET','SELL', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_1,T_C_1,r,self.sigma,'C','BUY',1))
             else:
                 print("At Strike",K_C_1,"The Call volatility is priced appropriately")
 
             if P_1_vol < self.sigma:
                 print("At Strike",K_P_1,"Buy 1M Put") #Buy as the implied vol is priced below what is forecast
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_1'][i] , 'MARKET','BUY', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_1,T_P_1,r,self.sigma,'P','BUY',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_1'][i] , 'MARKET','BUY', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_1,T_P_1,r,self.sigma,'P','BUY',1))
             elif P_1_vol > self.sigma:
                 print("At Strike",K_P_1,"Sell 1M Put") #Sell as the implied vol is priced above what is forecast
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_1'][i] , 'MARKET','SELL', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_1,T_P_1,r,self.sigma,'P','SELL',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_1'][i] , 'MARKET','SELL', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_1,T_P_1,r,self.sigma,'P','SELL',1))
             else:
                 print("At Strike",K_P_1,"The Call volatility is priced appropriately")
                                 
             if C_2_vol < self.sigma:
                 print("At Strike",K_C_2,"Buy 2M Call") #Buy as the implied vol is priced below what is forecast
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET','BUY', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_2,T_C_2,r,self.sigma,'C','SELL',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET','BUY', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_2,T_C_2,r,self.sigma,'C','SELL',1))
             elif C_2_vol > self.sigma:
                 print("At Strike",K_C_2,"Sell 2M Call") #Sell as the implied vol is priced above what is forecast
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET','SELL', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_2,T_C_2,r,self.sigma,'C','BUY',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET','SELL', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_2,T_C_2,r,self.sigma,'C','BUY',1))
             else:
                 print("At Strike",K_C_2,"The Call volatility is priced appropriately")
 
             if P_2_vol < self.sigma:
                 print("At Strike",K_P_2,"Buy 2M Put") #Buy as the implied vol is priced below what is forecast
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET','BUY', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_2,T_P_2,r,self.sigma,'P','BUY',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET','BUY', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_2,T_P_2,r,self.sigma,'P','BUY',1))
             elif P_2_vol > self.sigma:
                 print("At Strike",K_P_2,"Sell 2M Put") #Sell as the implied vol is priced above what is forecast
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET','SELL', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_2,T_P_2,r,self.sigma,'P','SELL',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET','SELL', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_2,T_P_2,r,self.sigma,'P','SELL',1))
             else:
                 print("At Strike",K_P_2,"The Call volatility is priced appropriately")
 
@@ -265,23 +291,23 @@ class OptionsTradingManager:
             
             if C_2_vol < self.sigma:
                 print("At Strike",K_C_2,"Buy 2M Call") #Buy as the implied vol is priced below what is forecast
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET','BUY', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_2,T_C_2,r,self.sigma,'C','SELL',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET','BUY', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_2,T_C_2,r,self.sigma,'C','SELL',1))
             elif C_2_vol > self.sigma:
                 print("At Strike",K_C_2,"Sell 2M Call") #Sell as the implied vol is priced above what is forecast
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET','SELL', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_2,T_C_2,r,self.sigma,'C','BUY',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET','SELL', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_C_2,T_C_2,r,self.sigma,'C','BUY',1))
             else:
                 print("At Strike",K_C_2,"The Call volatility is priced appropriately")
 
             if P_2_vol < self.sigma:
                 print("At Strike",K_P_2,"Buy 2M Put") #Buy as the implied vol is priced below what is forecast
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET','BUY', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_2,T_P_2,r,self.sigma,'P','BUY',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET','BUY', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_2,T_P_2,r,self.sigma,'P','BUY',1))
             elif P_2_vol > self.sigma:
                 print("At Strike",K_P_2,"Sell 2M Put") #Sell as the implied vol is priced above what is forecast
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET','SELL', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_2,T_P_2,r,self.sigma,'P','SELL',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET','SELL', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K_P_2,T_P_2,r,self.sigma,'P','SELL',1))
             else:
                 print("At Strike",K_P_2,"The Call volatility is priced appropriately")
 
@@ -308,21 +334,21 @@ class OptionsTradingManager:
                 
                 print("At Strike",K,"Buy Put 1M, Sell Call 1M")
 
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_1'][i] , 'MARKET','SELL', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'C','BUY',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_1'][i] , 'MARKET','SELL', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'C','BUY',1))
 
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_1'][i] , 'MARKET','BUY', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'P','BUY',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_1'][i] , 'MARKET','BUY', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'P','BUY',1))
                 
             elif C_1 < P_1 + S - K*np.exp(-r*T):
                 
                 print("At Strike",K,"Buy Call 1M, Sell Put 1M")
 
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_1'][i] , 'MARKET','BUY', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'C','SELL',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_1'][i] , 'MARKET','BUY', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'C','SELL',1))
 
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_1'][i] , 'MARKET','SELL', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'P','SELL',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_1'][i] , 'MARKET','SELL', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'P','SELL',1))
                 
 
             C_2 = self.options[tickers['ticker_C_2'][i]].get_midprice()
@@ -334,21 +360,21 @@ class OptionsTradingManager:
                 
                 print("At Strike",K,"Buy Put 2M, Sell Call 2M")
 
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET', 'SELL', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'C','BUY',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET', 'SELL', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'C','BUY',1))
 
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET', 'BUY', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'P','BUY',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET', 'BUY', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'P','BUY',1))
 
             elif C_2 < P_2 + S - K*np.exp(-r*T):
                 
                 print("At Strike",K,"Buy Call 2M, Sell Put 2M")
 
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET',  'BUY', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'C','SELL',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET',  'BUY', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'C','SELL',1))
 
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET',  'SELL', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'P','SELL',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET',  'SELL', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'P','SELL',1))
         
         oids = self.options_execution_manager.execute_orders(orders, 'OPTION')
         self.securities_execution_manager.execute_orders(sec_orders, 'OPTION')
@@ -369,21 +395,21 @@ class OptionsTradingManager:
                 
                 print("At Strike",K,"Buy Put 2M, Sell Call 2M")
 
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET', 'SELL', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'C','BUY',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET', 'SELL', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'C','BUY',1))
 
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET', 'BUY', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'P','BUY',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET', 'BUY', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'P','BUY',1))
 
             elif C_2 < P_2 + S - K*np.exp(-r*T):
                 
                 print("At Strike",K,"Buy Call 2M, Sell Put 2M")
 
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET',  'BUY', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'C','SELL',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_C_2'][i] , 'MARKET',  'BUY', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'C','SELL',1))
 
-                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET',  'SELL', 100))
-                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'P','SELL',100))
+                orders.append(self.options_execution_manager.create_order(tickers['ticker_P_2'][i] , 'MARKET',  'SELL', 1))
+                sec_orders.append(self.options_execution_manager.delta_hedge(S,K,T,r,self.sigma,'P','SELL',1))
 
         oids = self.options_execution_manager.execute_orders(orders, 'OPTION')
         self.securities_execution_manager.execute_orders(sec_orders, 'OPTION')

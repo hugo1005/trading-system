@@ -84,11 +84,11 @@ class TradingManager():
         # This is working decently, the only issue is the timing componet seems to be always zero
         # which seems to be something to do with a zero bucket duration.... 
         # This will probably work even better when thats fixed
-        self.tender_watcher = Thread(target=self.watch_for_tenders, name="Tender Watcher")
-        self.tender_watcher.start()
+        # self.tender_watcher = Thread(target=self.watch_for_tenders, name="Tender Watcher")
+        # self.tender_watcher.start()
 
-        # self.arbitrage_searcher = Thread(target=self.search_for_arbitrage)
-        # self.arbitrage_searcher.start()
+        self.arbitrage_searcher = Thread(target=self.search_for_arbitrage)
+        self.arbitrage_searcher.start()
 
 
     def __exit__(self, t, value, traceback):
@@ -189,7 +189,7 @@ class TradingManager():
     #TODO: Implement risk controls if the spread deviates massively (this is unlikely as RITC specifically
     # states the equilibrium relationship)
     """
-    def search_for_arbitrage(self, trading_size = 10000):
+    def search_for_arbitrage(self, trading_size = 30000):
         optimal_threshold = self.calibrate_model()
         last_spread = None
         position_status = 'CLOSED'
@@ -207,7 +207,7 @@ class TradingManager():
                 # TODO: Any wind down logic
                 break
             
-            if time() - last_hedge > 3:
+            if time() - last_hedge > 10:
                 self.execution_manager.hedge_position('ARBITRAGE')
                 last_hedge = time()
 
@@ -253,6 +253,7 @@ class TradingManager():
                 position_spread = spread
 
             # We unwind once the spread reverts at least an equal amount in the opposite direction
+            # if last_spread != None and position_spread * spread < 0 and position_status != 'CLOSED':
             if last_spread != None and position_spread * spread < 0 and abs(spread) > position_threshold and position_status != 'CLOSED':
                 print("[STAT ARB] Closing Position...")
                 leg_1_dir = 'BUY' if position_status == 'LONG' else 'SELL'
@@ -296,7 +297,7 @@ class TradingManager():
         historical_spread, avg_slippage = self.construct_historical_spread(['BEAR','BULL'], ['RITC'], USD_close)
         probabilities = self.get_threshold_probaility_curve(historical_spread, avg_slippage)
         optimal_threshold = max(self.get_optimal_threshold(probabilities), avg_slippage * 1.1) # We must cross spread twice, but we can wait for it to swing to the other extreme and double the threshold in profit
-        print("[STAT ARB] Calibrated Model to Optimal Threshold: %s with Slippage: %s " % (optimal_threshold, avg_slippage))
+        # print("[STAT ARB] Calibrated Model to Optimal Threshold: %s with Slippage: %s " % (optimal_threshold, avg_slippage))
         return optimal_threshold
 
     def construct_historical_spread(self, leg_1, leg_2, cointegration_coeff):
