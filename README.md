@@ -9,3 +9,5 @@ algo.py holds the main trading logic and thread initilisation.
 configs folder contains all necessary config parameters for API
 
 The remaining code files handle data capture and storage for a later date
+
+Hello World
