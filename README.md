@@ -10,4 +10,7 @@ configs folder contains all necessary config parameters for API
 
 The remaining code files handle data capture and storage for a later date
 
-Hello World
+Contributors:
+hugo1005 (Trading System)
+j0shward (Volatility)
+
